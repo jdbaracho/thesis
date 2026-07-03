@@ -1,0 +1,15 @@
+output/
+
+# python
+__pycache__/
+
+# disttribution / packaging
+build/
+dist/
+tesseract_bin/
+
+# office temp files
+~$*
+
+# macOS
+.ds_store
