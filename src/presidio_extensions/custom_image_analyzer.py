@@ -4,7 +4,7 @@ from presidio_analyzer import AnalyzerEngine
 from presidio_image_redactor.entities import ImageRecognizerResult
 from presidio_image_redactor import ImageAnalyzerEngine
 
-from custom_extensions.custom_utils import resolve_conflicts
+from src.presidio_extensions.presidio_utils import resolve_conflicts
 
 class CustomImageAnalyzerEngine(ImageAnalyzerEngine):
     def analyze(

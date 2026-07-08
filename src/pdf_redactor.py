@@ -18,13 +18,13 @@ import fitz  # PyMuPDF
 from PIL import Image, ImageDraw, ImageFont
 
 from presidio_analyzer import AnalyzerEngine, RecognizerResult
-from presidio_image_redactor.entities import ImageRecognizerResult
-
-from custom_extensions.custom_image_analyzer import CustomImageAnalyzerEngine
-from custom_extensions.custom_utils import resolve_conflicts
-from presidio_extensions.basic_langextract_recognizer import (
+from presidio_analyzer.predefined_recognizers.third_party.basic_langextract_recognizer import (
     BasicLangExtractRecognizer,
 )
+from presidio_image_redactor.entities import ImageRecognizerResult
+
+from src.presidio_extensions.custom_image_analyzer import CustomImageAnalyzerEngine
+from src.presidio_extensions.presidio_utils import resolve_conflicts
 
 
 logger = logging.getLogger(__name__)
@@ -34,7 +34,6 @@ logger = logging.getLogger(__name__)
 #: module's location so callers can run from any working directory.
 DEFAULT_CONFIG_PATH: str = str(
     Path(__file__).resolve().parent
-    / "presidio_extensions"
     / "config"
     / "ollama_config.yaml"
 )

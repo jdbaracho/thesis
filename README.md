@@ -1,6 +1,6 @@
 # PDF Redactor API
 
-A FastAPI service that wraps [`PDFRedactor`](pdf_redactor.py). Clients upload
+A FastAPI service that wraps [`PDFRedactor`](src/pdf_redactor.py). Clients upload
 one or more PDFs, the server redacts each one (Presidio + optional
 LangExtract LLM pass) and returns a ZIP containing every redacted PDF and its
 `.xlsx` translation table.
@@ -24,7 +24,10 @@ pip install -r requirements-api.txt
 ## 2. Run
 
 ```bash
-python api.py
+# From the repo root:
+python -m src.job_controller
+# or, equivalently:
+uvicorn src.job_controller:app --host 127.0.0.1 --port 8000
 ```
 
 Defaults: `http://127.0.0.1:8000`. Configuration via environment variables:
@@ -39,7 +42,7 @@ Defaults: `http://127.0.0.1:8000`. Configuration via environment variables:
 Example with a custom port and log level:
 
 ```bash
-HOST=0.0.0.0 PORT=8765 PDF_REDACTOR_API_LOG_LEVEL=WARNING python api.py
+HOST=0.0.0.0 PORT=8765 PDF_REDACTOR_API_LOG_LEVEL=WARNING python -m src.job_controller
 ```
 
 Interactive docs live at `http://<host>:<port>/docs` (Swagger UI) and
@@ -53,6 +56,8 @@ Interactive docs live at `http://<host>:<port>/docs` (Swagger UI) and
 | ------ | ----------------------- | -------------------------------------------------- |
 | GET    | `/health`               | Liveness probe                                     |
 | POST   | `/jobs`                 | Upload PDFs + start redaction. Returns `202` + job |
+| GET    | `/jobs`                 | List every tracked job                             |
+| DELETE | `/jobs`                 | Delete every tracked job and its files             |
 | GET    | `/jobs/{job_id}`        | Job status                                         |
 | GET    | `/jobs/{job_id}/result` | Download `application/zip` when completed          |
 | DELETE | `/jobs/{job_id}`        | Delete job and its files                           |
@@ -95,7 +100,7 @@ curl -sS "$BASE/health"
 
 ```bash
 curl -sS -X POST "$BASE/jobs" \
-  -F "files=@input/sample.pdf;type=application/pdf"
+  -F "files=@input/sample.pdf;type=application/pdf" \
   -F "use_llm=true" \
   -F "language=en"
 ```
@@ -154,7 +159,21 @@ curl -sS -X DELETE "$BASE/jobs/$JOB_ID"
 # HTTP 204, no body. Workdir removed from disk.
 ```
 
-### 4.7 End-to-end one-liner
+### 4.7 List every job
+
+```bash
+curl -sS "$BASE/jobs"
+# [ { "id": "...", "status": "completed", ... }, ... ]
+```
+
+### 4.8 Delete every job
+
+```bash
+curl -sS -X DELETE "$BASE/jobs"
+# {"deleted": 3}
+```
+
+### 4.9 End-to-end one-liner
 
 ```bash
 BASE=http://127.0.0.1:8000
