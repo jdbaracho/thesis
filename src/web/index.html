@@ -1,0 +1,555 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PDF Redactor</title>
+    <link rel="icon" href="data:," />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      .dropzone.dragover {
+        border-color: rgb(37 99 235);
+        background-color: rgb(239 246 255);
+      }
+      .spinner {
+        width: 1rem;
+        height: 1rem;
+        border: 2px solid rgba(255, 255, 255, 0.4);
+        border-top-color: white;
+        border-radius: 9999px;
+        animation: spin 0.8s linear infinite;
+        display: inline-block;
+      }
+      @keyframes spin {
+        to { transform: rotate(360deg); }
+      }
+    </style>
+  </head>
+  <body class="bg-slate-50 text-slate-800 min-h-screen">
+    <!-- Header -->
+    <header class="bg-white border-b border-slate-200">
+      <div class="max-w-5xl mx-auto px-4 py-4 flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <div class="w-9 h-9 rounded-lg bg-blue-600 text-white grid place-items-center font-bold">PR</div>
+          <div>
+            <h1 class="text-lg font-semibold leading-tight">PDF Redactor</h1>
+            <p class="text-xs text-slate-500 leading-tight">Upload PDFs, get redacted copies with a translation table.</p>
+          </div>
+        </div>
+        <div class="flex items-center gap-2 text-xs">
+          <span id="health-dot" class="inline-block w-2.5 h-2.5 rounded-full bg-slate-300"></span>
+          <span id="health-label" class="text-slate-500">Checking…</span>
+        </div>
+      </div>
+    </header>
+
+    <main class="max-w-5xl mx-auto px-4 py-6 space-y-6">
+      <!-- Upload card -->
+      <section class="bg-white border border-slate-200 rounded-xl shadow-sm">
+        <div class="px-5 py-4 border-b border-slate-200">
+          <h2 class="font-semibold text-slate-900">New redaction job</h2>
+          <p class="text-xs text-slate-500 mt-0.5">Drop one or more PDFs below, choose the options, then submit.</p>
+        </div>
+        <div class="p-5 space-y-4">
+          <!-- Drop zone -->
+          <div
+            id="dropzone"
+            class="dropzone border-2 border-dashed border-slate-300 rounded-lg px-6 py-10 text-center cursor-pointer transition-colors hover:bg-slate-50"
+          >
+            <input id="file-input" type="file" multiple accept="application/pdf" class="hidden" />
+            <p class="text-sm text-slate-700">
+              <span class="font-medium">Drop PDFs here</span> or
+              <span class="text-blue-600 underline">click to browse</span>
+            </p>
+            <p class="text-xs text-slate-500 mt-1">Only <code class="text-slate-600">.pdf</code> files are accepted. You can drop several at once.</p>
+          </div>
+
+          <!-- Selected file list -->
+          <div id="file-list-wrapper" class="hidden">
+            <div class="flex items-center justify-between text-xs text-slate-500 mb-2">
+              <span id="file-list-summary">0 files selected</span>
+              <button id="clear-files" type="button" class="text-slate-500 hover:text-slate-800 underline">Remove all</button>
+            </div>
+            <ul id="file-list" class="divide-y divide-slate-100 border border-slate-200 rounded-lg text-sm"></ul>
+          </div>
+
+          <!-- Options -->
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+            <label class="block">
+              <span class="text-sm font-medium text-slate-700">Document language</span>
+              <select
+                id="language"
+                class="mt-1 block w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              >
+                <option value="en">English (en)</option>
+                <option value="es">Spanish (es)</option>
+                <option value="pt">Portuguese (pt)</option>
+              </select>
+            </label>
+            <label class="flex items-start gap-3 mt-1">
+              <input id="use-llm" type="checkbox" checked class="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+              <span class="text-sm">
+                <span class="font-medium text-slate-700">Use the LLM pass</span>
+                <span class="block text-xs text-slate-500">Slower, but catches more sensitive data. Uncheck for a quick pass.</span>
+              </span>
+            </label>
+          </div>
+
+          <!-- Errors -->
+          <div id="submit-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
+
+          <!-- Submit -->
+          <div class="flex items-center justify-end gap-3 pt-2">
+            <button
+              id="submit-btn"
+              type="button"
+              disabled
+              class="inline-flex items-center gap-2 rounded-md bg-blue-600 text-white px-4 py-2 text-sm font-medium hover:bg-blue-700 disabled:bg-slate-300 disabled:cursor-not-allowed"
+            >
+              <span id="submit-spinner" class="spinner hidden"></span>
+              <span id="submit-label">Submit for redaction</span>
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Jobs card -->
+      <section class="bg-white border border-slate-200 rounded-xl shadow-sm">
+        <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
+          <div>
+            <h2 class="font-semibold text-slate-900">Jobs</h2>
+            <p class="text-xs text-slate-500 mt-0.5">
+              <span id="jobs-count">0</span> total ·
+              <span id="polling-status">refreshing every 3 s</span>
+            </p>
+          </div>
+          <div class="flex items-center gap-2">
+            <button id="refresh-btn" type="button" class="text-sm rounded-md border border-slate-300 bg-white px-3 py-1.5 hover:bg-slate-50">
+              Refresh now
+            </button>
+            <button id="delete-all-btn" type="button" class="text-sm rounded-md border border-red-200 bg-white text-red-700 px-3 py-1.5 hover:bg-red-50">
+              Delete all
+            </button>
+          </div>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead class="bg-slate-50 text-slate-600 text-xs uppercase tracking-wide">
+              <tr>
+                <th class="text-left font-medium px-4 py-2">Job</th>
+                <th class="text-left font-medium px-4 py-2">Status</th>
+                <th class="text-right font-medium px-4 py-2">Files</th>
+                <th class="text-left font-medium px-4 py-2">Created</th>
+                <th class="text-left font-medium px-4 py-2">Duration</th>
+                <th class="text-right font-medium px-4 py-2">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="jobs-tbody" class="divide-y divide-slate-100">
+              <tr>
+                <td colspan="6" class="px-4 py-8 text-center text-sm text-slate-500">No jobs yet. Upload some PDFs above.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <footer class="max-w-5xl mx-auto px-4 py-6 text-xs text-slate-400">
+      <a href="/docs" class="hover:text-slate-600 underline">API docs</a>
+    </footer>
+
+    <script>
+      "use strict";
+
+      // ---------- API wrapper ----------
+      const api = {
+        async health() {
+          const r = await fetch("/health", { cache: "no-store" });
+          if (!r.ok) throw new Error(`Health ${r.status}`);
+          return r.json();
+        },
+        async listJobs() {
+          const r = await fetch("/jobs", { cache: "no-store" });
+          if (!r.ok) throw new Error(`List jobs ${r.status}`);
+          return r.json();
+        },
+        async createJob({ files, language, useLlm }) {
+          const fd = new FormData();
+          for (const f of files) fd.append("files", f, f.name);
+          fd.append("language", language);
+          fd.append("use_llm", useLlm ? "true" : "false");
+          const r = await fetch("/jobs", { method: "POST", body: fd });
+          if (!r.ok) {
+            const detail = await safeDetail(r);
+            throw new Error(detail || `Submit failed (${r.status})`);
+          }
+          return r.json();
+        },
+        async deleteJob(id) {
+          const r = await fetch(`/jobs/${encodeURIComponent(id)}`, { method: "DELETE" });
+          if (!r.ok && r.status !== 204) {
+            const detail = await safeDetail(r);
+            throw new Error(detail || `Delete failed (${r.status})`);
+          }
+        },
+        async deleteAll() {
+          const r = await fetch("/jobs", { method: "DELETE" });
+          if (!r.ok) {
+            const detail = await safeDetail(r);
+            throw new Error(detail || `Delete all failed (${r.status})`);
+          }
+          return r.json();
+        },
+      };
+
+      async function safeDetail(r) {
+        try {
+          const j = await r.json();
+          if (j && typeof j.detail === "string") return j.detail;
+          if (j && j.detail) return JSON.stringify(j.detail);
+        } catch {}
+        return null;
+      }
+
+      // ---------- State ----------
+      const state = {
+        selectedFiles: [],
+        jobs: [],
+        submitting: false,
+      };
+
+      // ---------- DOM helpers ----------
+      const $ = (id) => document.getElementById(id);
+
+      function fmtBytes(n) {
+        if (n < 1024) return `${n} B`;
+        if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+        return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+      }
+
+      function fmtDateTime(iso) {
+        if (!iso) return "—";
+        try {
+          const d = new Date(iso);
+          return d.toLocaleString();
+        } catch {
+          return iso;
+        }
+      }
+
+      function fmtDuration(job) {
+        const start = job.started_at ? new Date(job.started_at) : null;
+        const end = job.finished_at
+          ? new Date(job.finished_at)
+          : job.status === "running"
+            ? new Date()
+            : null;
+        if (!start || !end) return "—";
+        const ms = Math.max(0, end.getTime() - start.getTime());
+        if (ms < 1000) return `${ms} ms`;
+        const s = Math.floor(ms / 1000);
+        if (s < 60) return `${s}s`;
+        const m = Math.floor(s / 60);
+        const rem = s % 60;
+        return `${m}m ${rem}s`;
+      }
+
+      const STATUS_STYLES = {
+        pending: "bg-amber-100 text-amber-800",
+        running: "bg-blue-100 text-blue-800",
+        completed: "bg-emerald-100 text-emerald-800",
+        failed: "bg-red-100 text-red-800",
+      };
+      const STATUS_LABELS = {
+        pending: "Pending",
+        running: "Running",
+        completed: "Completed",
+        failed: "Failed",
+      };
+
+      function escapeHtml(s) {
+        return String(s).replace(/[&<>"']/g, (c) => ({
+          "&": "&amp;",
+          "<": "&lt;",
+          ">": "&gt;",
+          '"': "&quot;",
+          "'": "&#39;",
+        })[c]);
+      }
+
+      // ---------- File selection ----------
+      const dropzone = $("dropzone");
+      const fileInput = $("file-input");
+      const fileListWrapper = $("file-list-wrapper");
+      const fileListEl = $("file-list");
+      const fileListSummary = $("file-list-summary");
+      const submitBtn = $("submit-btn");
+      const submitError = $("submit-error");
+
+      dropzone.addEventListener("click", () => fileInput.click());
+      dropzone.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        dropzone.classList.add("dragover");
+      });
+      dropzone.addEventListener("dragleave", () => dropzone.classList.remove("dragover"));
+      dropzone.addEventListener("drop", (e) => {
+        e.preventDefault();
+        dropzone.classList.remove("dragover");
+        addFiles(e.dataTransfer.files);
+      });
+      fileInput.addEventListener("change", (e) => {
+        addFiles(e.target.files);
+        // Reset so re-selecting the same file re-fires change.
+        fileInput.value = "";
+      });
+
+      function addFiles(fileList) {
+        const incoming = Array.from(fileList || []);
+        const pdfs = incoming.filter(
+          (f) => /\.pdf$/i.test(f.name) || f.type === "application/pdf"
+        );
+        const rejected = incoming.length - pdfs.length;
+        for (const f of pdfs) {
+          if (!state.selectedFiles.some((x) => x.name === f.name && x.size === f.size)) {
+            state.selectedFiles.push(f);
+          }
+        }
+        if (rejected > 0) {
+          showSubmitError(
+            `${rejected} file${rejected === 1 ? "" : "s"} skipped — only PDFs are accepted.`
+          );
+        } else {
+          hideSubmitError();
+        }
+        renderFileList();
+      }
+
+      function removeFile(index) {
+        state.selectedFiles.splice(index, 1);
+        renderFileList();
+      }
+
+      $("clear-files").addEventListener("click", () => {
+        state.selectedFiles = [];
+        renderFileList();
+      });
+
+      function renderFileList() {
+        const files = state.selectedFiles;
+        if (files.length === 0) {
+          fileListWrapper.classList.add("hidden");
+          submitBtn.disabled = true;
+          return;
+        }
+        fileListWrapper.classList.remove("hidden");
+        submitBtn.disabled = state.submitting;
+        const totalBytes = files.reduce((acc, f) => acc + f.size, 0);
+        fileListSummary.textContent = `${files.length} file${files.length === 1 ? "" : "s"} selected · ${fmtBytes(totalBytes)}`;
+        fileListEl.innerHTML = files
+          .map(
+            (f, i) => `
+            <li class="flex items-center justify-between px-3 py-2">
+              <div class="min-w-0">
+                <div class="truncate">${escapeHtml(f.name)}</div>
+                <div class="text-xs text-slate-500">${fmtBytes(f.size)}</div>
+              </div>
+              <button data-idx="${i}" class="remove-file text-slate-400 hover:text-red-600 text-xs px-2 py-1" aria-label="Remove">Remove</button>
+            </li>`
+          )
+          .join("");
+        for (const btn of fileListEl.querySelectorAll(".remove-file")) {
+          btn.addEventListener("click", () => removeFile(Number(btn.dataset.idx)));
+        }
+      }
+
+      function showSubmitError(msg) {
+        submitError.textContent = msg;
+        submitError.classList.remove("hidden");
+      }
+      function hideSubmitError() {
+        submitError.classList.add("hidden");
+        submitError.textContent = "";
+      }
+
+      // ---------- Submit ----------
+      submitBtn.addEventListener("click", async () => {
+        if (state.selectedFiles.length === 0 || state.submitting) return;
+        state.submitting = true;
+        submitBtn.disabled = true;
+        $("submit-spinner").classList.remove("hidden");
+        $("submit-label").textContent = "Uploading…";
+        hideSubmitError();
+        try {
+          await api.createJob({
+            files: state.selectedFiles,
+            language: $("language").value,
+            useLlm: $("use-llm").checked,
+          });
+          state.selectedFiles = [];
+          renderFileList();
+          await pollJobs(); // immediate refresh so the new row shows up
+        } catch (err) {
+          showSubmitError(err.message || "Something went wrong.");
+        } finally {
+          state.submitting = false;
+          $("submit-spinner").classList.add("hidden");
+          $("submit-label").textContent = "Submit for redaction";
+          submitBtn.disabled = state.selectedFiles.length === 0;
+        }
+      });
+
+      // ---------- Jobs table ----------
+      const tbody = $("jobs-tbody");
+      const jobsCount = $("jobs-count");
+
+      function renderJobs() {
+        const jobs = state.jobs.slice().sort((a, b) => {
+          // Newest first.
+          const at = a.created_at ? Date.parse(a.created_at) : 0;
+          const bt = b.created_at ? Date.parse(b.created_at) : 0;
+          return bt - at;
+        });
+        jobsCount.textContent = String(jobs.length);
+        if (jobs.length === 0) {
+          tbody.innerHTML = `
+            <tr>
+              <td colspan="6" class="px-4 py-8 text-center text-sm text-slate-500">No jobs yet. Upload some PDFs above.</td>
+            </tr>`;
+          return;
+        }
+        tbody.innerHTML = jobs.map(rowHtml).join("");
+        for (const btn of tbody.querySelectorAll("[data-action='delete']")) {
+          btn.addEventListener("click", () => onDeleteJob(btn.dataset.id));
+        }
+      }
+
+      function rowHtml(job) {
+        const shortId = job.id ? job.id.slice(0, 8) : "—";
+        const statusClass = STATUS_STYLES[job.status] || "bg-slate-100 text-slate-800";
+        const statusLabel = STATUS_LABELS[job.status] || job.status;
+        const canDownload = job.status === "completed" && job.result_url;
+        const errorAttr = job.error ? ` title="${escapeHtml(job.error)}"` : "";
+        return `
+          <tr>
+            <td class="px-4 py-3 font-mono text-xs text-slate-600" title="${escapeHtml(job.id || "")}">${escapeHtml(shortId)}</td>
+            <td class="px-4 py-3">
+              <span class="inline-block rounded-full px-2 py-0.5 text-xs font-medium ${statusClass}"${errorAttr}>${escapeHtml(statusLabel)}</span>
+              ${job.error ? `<div class="text-xs text-red-600 mt-1 truncate max-w-xs" title="${escapeHtml(job.error)}">${escapeHtml(job.error)}</div>` : ""}
+            </td>
+            <td class="px-4 py-3 text-right tabular-nums">${job.file_count ?? "—"}</td>
+            <td class="px-4 py-3 text-slate-600">${escapeHtml(fmtDateTime(job.created_at))}</td>
+            <td class="px-4 py-3 text-slate-600 tabular-nums">${escapeHtml(fmtDuration(job))}</td>
+            <td class="px-4 py-3 text-right whitespace-nowrap">
+              ${
+                canDownload
+                  ? `<a href="${escapeHtml(job.result_url)}" class="inline-block text-sm rounded-md bg-emerald-600 text-white px-3 py-1.5 hover:bg-emerald-700" download>Download</a>`
+                  : `<span class="inline-block text-sm rounded-md bg-slate-100 text-slate-400 px-3 py-1.5 cursor-not-allowed">Download</span>`
+              }
+              <button data-action="delete" data-id="${escapeHtml(job.id || "")}" class="ml-1 text-sm rounded-md border border-slate-300 bg-white px-3 py-1.5 text-slate-700 hover:bg-slate-50">Delete</button>
+            </td>
+          </tr>`;
+      }
+
+      async function onDeleteJob(id) {
+        if (!id) return;
+        if (!confirm("Delete this job and its files?")) return;
+        try {
+          await api.deleteJob(id);
+          state.jobs = state.jobs.filter((j) => j.id !== id);
+          renderJobs();
+          pollJobs();
+        } catch (err) {
+          alert(err.message || "Delete failed.");
+        }
+      }
+
+      $("delete-all-btn").addEventListener("click", async () => {
+        if (state.jobs.length === 0) return;
+        if (!confirm(`Delete all ${state.jobs.length} jobs and their files? This cannot be undone.`)) return;
+        try {
+          await api.deleteAll();
+          state.jobs = [];
+          renderJobs();
+        } catch (err) {
+          alert(err.message || "Delete all failed.");
+        }
+      });
+
+      $("refresh-btn").addEventListener("click", () => pollJobs());
+
+      // ---------- Polling ----------
+      const POLL_MS = 3000;
+      let pollTimer = null;
+
+      async function pollJobs() {
+        try {
+          state.jobs = await api.listJobs();
+          renderJobs();
+          setHealth(true);
+        } catch (err) {
+          setHealth(false, err.message);
+        }
+      }
+
+      function startPolling() {
+        if (pollTimer) return;
+        pollTimer = setInterval(() => {
+          if (document.visibilityState === "visible") pollJobs();
+        }, POLL_MS);
+        $("polling-status").textContent = "refreshing every 3 s";
+      }
+      function stopPolling() {
+        if (pollTimer) {
+          clearInterval(pollTimer);
+          pollTimer = null;
+        }
+        $("polling-status").textContent = "auto-refresh paused";
+      }
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") {
+          startPolling();
+          pollJobs();
+        } else {
+          stopPolling();
+        }
+      });
+
+      // Refresh running-job durations every second without hitting the server.
+      setInterval(() => {
+        if (
+          document.visibilityState === "visible" &&
+          state.jobs.some((j) => j.status === "running")
+        ) {
+          renderJobs();
+        }
+      }, 1000);
+
+      // ---------- Health ----------
+      const healthDot = $("health-dot");
+      const healthLabel = $("health-label");
+      function setHealth(ok, msg) {
+        if (ok) {
+          healthDot.className = "inline-block w-2.5 h-2.5 rounded-full bg-emerald-500";
+          healthLabel.textContent = "Online";
+          healthLabel.className = "text-emerald-700";
+        } else {
+          healthDot.className = "inline-block w-2.5 h-2.5 rounded-full bg-red-500";
+          healthLabel.textContent = msg ? `Offline — ${msg}` : "Offline";
+          healthLabel.className = "text-red-700";
+        }
+      }
+
+      // ---------- Boot ----------
+      (async () => {
+        try {
+          await api.health();
+          setHealth(true);
+        } catch (err) {
+          setHealth(false, err.message);
+        }
+        await pollJobs();
+        startPolling();
+      })();
+    </script>
+  </body>
+</html>

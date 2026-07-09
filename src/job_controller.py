@@ -29,6 +29,7 @@ from __future__ import annotations
 import logging
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Dict, List
 
 from fastapi import (
@@ -41,6 +42,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from src import job_service
 from src.domain.job_response import JobResponse
@@ -86,6 +88,21 @@ app = FastAPI(
     version="1.0.0",
     lifespan=_lifespan,
 )
+
+_WEB_DIR = Path(__file__).resolve().parent / "web"
+_INDEX_HTML = _WEB_DIR / "index.html"
+
+app.mount(
+    "/static",
+    StaticFiles(directory=_WEB_DIR / "static"),
+    name="static",
+)
+
+
+@app.get("/", include_in_schema=False)
+async def index() -> FileResponse:
+    """Serve the single-page web UI."""
+    return FileResponse(_INDEX_HTML, media_type="text/html")
 
 
 @app.get("/health", tags=["meta"])
