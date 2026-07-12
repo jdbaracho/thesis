@@ -135,6 +135,7 @@ class PDFRedactor:
         processed_xrefs: Set[int] = set()
 
         for page in doc:
+            self._analyze_page_text(page, translation_table, pending_redactions)
             self._analyze_page_images(
                 page,
                 doc,
@@ -142,11 +143,10 @@ class PDFRedactor:
                 pending_image_redactions,
                 processed_xrefs,
             )
-            self._analyze_page_text(page, translation_table, pending_redactions)
 
         self._finalize_translation_table(translation_table)
-        self._draw_image_redactions(pending_image_redactions, translation_table)
         self._apply_text_redactions(pending_redactions, translation_table)
+        self._draw_image_redactions(pending_image_redactions, translation_table)
 
         return doc, translation_table
 
@@ -286,6 +286,8 @@ class PDFRedactor:
     ) -> None:
         """Draw labeled boxes onto OCR'd images and push them back into the PDF."""
         for page, xref, pil_image, image_entries in pending_image_redactions:
+            if pil_image.mode != "RGB":
+                pil_image = pil_image.convert("RGB")
             draw = ImageDraw.Draw(pil_image)
             for box, entity_text in image_entries:
                 x0 = box.left
