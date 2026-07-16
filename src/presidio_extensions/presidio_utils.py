@@ -20,4 +20,4 @@ def resolve_conflicts(
     results = _anonymizer._remove_conflicts_and_get_text_manipulation_data(
         results, conflict_resolution
     )
-    return _anonymizer._merge_entities_with_whitespace_between(text, results)
+    return _anonymizer._merge_entities_with_spaces_between(text, results)
