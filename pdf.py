@@ -14,12 +14,12 @@ from src.translation_table import save_translation_table_xlsx
 
 
 if __name__ == "__main__":
-    input_pdf = "input/text_image.pdf"
-    output_pdf = "output/text_image_redacted.pdf"
+    input_pdf = "input/pii_test_document.pdf"
+    output_pdf = "output/pii_test_document.pdf"
     output_xlsx = os.path.splitext(output_pdf)[0] + ".xlsx"
 
     doc = fitz.open(input_pdf)
-    redactor = PDFRedactor(use_llm=True)
+    redactor = PDFRedactor(use_llm=False)
     doc, translation_table = redactor.redact(doc)
 
     os.makedirs(os.path.dirname(output_pdf), exist_ok=True)

@@ -11,6 +11,7 @@ from __future__ import annotations
 import io
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple, TypedDict
 
@@ -70,6 +71,21 @@ def _load_font(size: int) -> ImageFont.ImageFont:
         except (IOError, OSError):
             continue
     return ImageFont.load_default()
+
+
+#: Matches any run of whitespace (spaces, tabs, newlines) for entity-key
+#: normalization.
+_WHITESPACE_RE = re.compile(r"\s+")
+
+
+def _normalize_entity_text(text: str) -> str:
+    """Collapse runs of whitespace to a single space and strip ends.
+
+    Used as the canonical translation-table key so ill-formatted PDFs
+    that emit e.g. ``"John   Doe"`` and ``"John Doe"`` map to the same
+    entry (and therefore share the same alias id).
+    """
+    return _WHITESPACE_RE.sub(" ", text).strip()
 
 
 class PDFRedactor:
@@ -135,6 +151,7 @@ class PDFRedactor:
         processed_xrefs: Set[int] = set()
 
         for page in doc:
+            print(f"Analyzing page {page.number + 1}/{len(doc)}...")
             self._analyze_page_text(page, translation_table, pending_redactions)
             self._analyze_page_images(
                 page,
@@ -160,7 +177,9 @@ class PDFRedactor:
     ) -> None:
         """Accumulate detections into ``translation_table`` (max score per type)."""
         for result in results:
-            entity_text = text[result.start:result.end]
+            entity_text = _normalize_entity_text(text[result.start:result.end])
+            if not entity_text:
+                continue
             if entity_text not in translation_table:
                 translation_table[entity_text] = {
                     "id": None,
@@ -219,7 +238,10 @@ class PDFRedactor:
 
             # Capture entity_text for each box now (we have the OCR'd `text`);
             # actual drawing/replacing happens after ids are assigned.
-            image_entries = [(box, text[box.start:box.end]) for box in bboxes]
+            image_entries = [
+                (box, _normalize_entity_text(text[box.start:box.end]))
+                for box in bboxes
+            ]
             pending_image_redactions.append(
                 (page, xref, pil_image, image_entries)
             )
@@ -230,41 +252,103 @@ class PDFRedactor:
         translation_table: TranslationTable,
         pending_redactions: List[PendingTextRedaction],
     ) -> None:
-        """Run Presidio on each text span of ``page`` and queue redaction rects."""
-        text_dict = page.get_text("rawdict")
+        """Run Presidio on the full page text and queue redaction rects.
 
-        for block in text_dict["blocks"]:
+        Building a single page-level string (rather than analyzing one span at
+        a time) is required because justified PDFs frequently emit each word
+        as its own line/span. Analyzing per span would hide entities like
+        ``"Jonathan Vance Jr."`` from the recognizer since the words would
+        never appear together in the input.
+        """
+        full_text, char_records = self._extract_page_text(page)
+        if not full_text.strip():
+            return
+
+        results = self.analyzer.analyze(text=full_text, language=self.language)
+        results = resolve_conflicts(full_text, results)
+
+        self._process_results(results, full_text, translation_table)
+
+        for result in results:
+            entity_text = _normalize_entity_text(
+                full_text[result.start:result.end]
+            )
+            matched_chars = [
+                c for c in char_records[result.start:result.end] if c is not None
+            ]
+            for rect in self._chars_to_line_rects(matched_chars):
+                pending_redactions.append((page, rect, entity_text))
+
+    @staticmethod
+    def _extract_page_text(
+        page: fitz.Page,
+    ) -> Tuple[str, List[Optional[dict]]]:
+        """Return ``(full_text, char_records)`` for ``page``.
+
+        ``char_records`` is index-aligned with ``full_text``: entry ``i`` is
+        the source char dict (with ``bbox``) for ``full_text[i]``, or ``None``
+        for separators inserted at line/block boundaries.
+        """
+        text_parts: List[str] = []
+        char_records: List[Optional[dict]] = []
+
+        for block in page.get_text("rawdict")["blocks"]:
             if block["type"] != 0:  # Skip non-text blocks (e.g. images)
                 continue
 
             for line in block["lines"]:
                 for span in line["spans"]:
-                    chars = span.get("chars", [])
-                    text = "".join(c["c"] for c in chars)
+                    for ch in span.get("chars", []):
+                        text_parts.append(ch["c"])
+                        char_records.append(ch)
+                # Line boundary: insert a space so adjacent words don't merge.
+                text_parts.append(" ")
+                char_records.append(None)
+            # Block boundary: newline helps Presidio's sentence heuristics
+            # without gluing paragraphs together.
+            text_parts.append("\n")
+            char_records.append(None)
 
-                    if not text.strip() or not chars:
-                        continue
+        return "".join(text_parts), char_records
 
-                    results = self.analyzer.analyze(text=text, language=self.language)
-                    results = resolve_conflicts(text, results)
+    @staticmethod
+    def _chars_to_line_rects(matched_chars: List[dict]) -> List[fitz.Rect]:
+        """Group ``matched_chars`` by visual line and return one rect per line.
 
-                    self._process_results(results, text, translation_table)
+        A single entity match may wrap across lines; emitting one rect per
+        line prevents the union bbox from covering unrelated text between
+        them.
+        """
+        if not matched_chars:
+            return []
 
-                    for result in results:
-                        matched_chars = chars[result.start:result.end]
-                        if not matched_chars:
-                            continue
+        matched_chars = sorted(
+            matched_chars,
+            key=lambda c: (
+                round((c["bbox"][1] + c["bbox"][3]) / 2, 1),
+                c["bbox"][0],
+            ),
+        )
 
-                        # Combine individual character bounding boxes
-                        x0 = min(c["bbox"][0] for c in matched_chars)
-                        y0 = min(c["bbox"][1] for c in matched_chars)
-                        x1 = max(c["bbox"][2] for c in matched_chars)
-                        y1 = max(c["bbox"][3] for c in matched_chars)
+        line_groups: List[List[dict]] = [[matched_chars[0]]]
+        for c in matched_chars[1:]:
+            y_mid = (c["bbox"][1] + c["bbox"][3]) / 2
+            line_height = c["bbox"][3] - c["bbox"][1]
+            prev_bbox = line_groups[-1][0]["bbox"]
+            prev_mid = (prev_bbox[1] + prev_bbox[3]) / 2
+            if abs(y_mid - prev_mid) < max(line_height, 1.0):
+                line_groups[-1].append(c)
+            else:
+                line_groups.append([c])
 
-                        entity_text = text[result.start:result.end]
-                        pending_redactions.append(
-                            (page, fitz.Rect(x0, y0, x1, y1), entity_text)
-                        )
+        rects: List[fitz.Rect] = []
+        for line_chars in line_groups:
+            x0 = min(c["bbox"][0] for c in line_chars)
+            y0 = min(c["bbox"][1] for c in line_chars)
+            x1 = max(c["bbox"][2] for c in line_chars)
+            y1 = max(c["bbox"][3] for c in line_chars)
+            rects.append(fitz.Rect(x0, y0, x1, y1))
+        return rects
 
     @staticmethod
     def _finalize_translation_table(translation_table: TranslationTable) -> None:
