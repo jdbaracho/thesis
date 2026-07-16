@@ -1,0 +1,14 @@
+fastapi
+uvicorn[standard]
+python-multipart
+pymupdf
+pillow
+openpyxl
+pydantic
+pytesseract
+presidio-analyzer
+presidio-anonymizer
+presidio-image-redactor
+langextract
+pyyaml
+jinja2

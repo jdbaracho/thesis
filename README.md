@@ -12,14 +12,40 @@ the result ZIP.
 
 ## 1. Install
 
+### 1.1 System dependencies
+
+Two things `pip` cannot install for you:
+
+- **Tesseract OCR** — needed by `pytesseract` for redacting scanned/image PDFs.
+  ```bash
+  # Debian / Ubuntu
+  sudo apt install tesseract-ocr
+  # macOS
+  brew install tesseract
+  ```
+- **Ollama** (only if you plan to run with `use_llm=true`) — the LangExtract
+  recognizer talks to a local LLM. Install from <https://ollama.com>, then:
+  ```bash
+  ollama pull gemma3:12b
+  ```
+  Adjust `model_url` in [`src/config/ollama_config.yaml`](src/config/ollama_config.yaml)
+  if Ollama is not reachable at `http://ollama:11434` (e.g. use
+  `http://localhost:11434` for a local install).
+
+### 1.2 Python dependencies
+
 ```bash
 # from the repo root, inside your venv
-pip install -r requirements-api.txt
+pip install -r requirements.txt
+python -m spacy download en_core_web_lg
 ```
 
-`requirements-api.txt` only lists what the HTTP layer needs (`fastapi`,
-`uvicorn[standard]`, `python-multipart`). The redactor's own dependencies
-(Presidio, PyMuPDF, LangExtract, …) come from the rest of the project.
+`requirements.txt` covers both the HTTP layer (FastAPI, uvicorn,
+python-multipart) and the redactor itself (Presidio, PyMuPDF, LangExtract,
+openpyxl, …). The spaCy model is a separate download because it is not a
+regular PyPI package.
+
+---
 
 ## 2. Run
 
