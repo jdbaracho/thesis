@@ -1,0 +1,163 @@
+# Exemplos de extração de PII/PHI com LangExtract para Presidio (português europeu)
+# São utilizados os nomes de entidade do Presidio em maiúsculas (agnósticos ao idioma)
+
+examples:
+  # 1) Pessoa + email + telefone
+  - text: "Chamo-me João Silva e o meu email é joao.silva@exemplo.pt. Contacte-me pelo 21 123 45 67."
+    extractions:
+      - extraction_class: "PERSON"
+        extraction_text: "João Silva"
+        attributes:
+          type: "full_name"
+      - extraction_class: "EMAIL_ADDRESS"
+        extraction_text: "joao.silva@exemplo.pt"
+        attributes:
+          type: "email_address"
+      - extraction_class: "PHONE_NUMBER"
+        extraction_text: "21 123 45 67"
+        attributes:
+          type: "phone_number"
+          region: "PT"
+
+  # 2) Morada
+  - text: "Enviar para Rua Augusta 100, 3.º Esq., 1100-053 Lisboa."
+    extractions:
+      - extraction_class: "LOCATION"
+        extraction_text: "Rua Augusta 100, 3.º Esq., 1100-053 Lisboa"
+        attributes:
+          type: "street_address"
+
+  # 3) Data de nascimento
+  - text: "Data de nascimento: 15/01/1980."
+    extractions:
+      - extraction_class: "DATE_TIME"
+        extraction_text: "15/01/1980"
+        attributes:
+          type: "date_of_birth"
+          format: "DD/MM/YYYY"
+
+  # 4) Variantes de cartão de crédito
+  - text: "Utilize o cartão 4532123412341234 ou 4532-1234-1234-1234."
+    extractions:
+      - extraction_class: "CREDIT_CARD"
+        extraction_text: "4532123412341234"
+        attributes:
+          type: "credit_card_number"
+      - extraction_class: "CREDIT_CARD"
+        extraction_text: "4532-1234-1234-1234"
+        attributes:
+          type: "credit_card_number"
+
+  # 5) Email com marca plus + organização
+  - text: "Contactar maria.costa+faturacao@sub.acme-pt.pt na Acme Portugal."
+    extractions:
+      - extraction_class: "EMAIL_ADDRESS"
+        extraction_text: "maria.costa+faturacao@sub.acme-pt.pt"
+        attributes:
+          type: "email_address"
+      - extraction_class: "ORGANIZATION"
+        extraction_text: "Acme Portugal"
+        attributes:
+          type: "company"
+
+  # 6) Formatos internacionais de telefone
+  - text: "Escritório do Porto: +351 22 555 12 34; escritório de Londres: +44 20 7946 0958."
+    extractions:
+      - extraction_class: "PHONE_NUMBER"
+        extraction_text: "+351 22 555 12 34"
+        attributes:
+          type: "phone_number"
+          region: "PT"
+      - extraction_class: "PHONE_NUMBER"
+        extraction_text: "+44 20 7946 0958"
+        attributes:
+          type: "phone_number"
+          region: "GB"
+
+  # 7) Endereços IP
+  - text: "Servidores da empresa: 192.168.1.100 e fe80::1ff:fe23:4567:890a."
+    extractions:
+      - extraction_class: "IP_ADDRESS"
+        extraction_text: "192.168.1.100"
+        attributes:
+          type: "ipv4"
+      - extraction_class: "IP_ADDRESS"
+        extraction_text: "fe80::1ff:fe23:4567:890a"
+        attributes:
+          type: "ipv6"
+
+  # 8) IBAN + email de apoio
+  - text: "Efetue a transferência para o IBAN PT50 0002 0123 1234 5678 9015 4. Contacto: suporte@banco.pt."
+    extractions:
+      - extraction_class: "IBAN_CODE"
+        extraction_text: "PT50 0002 0123 1234 5678 9015 4"
+        attributes:
+          type: "iban"
+          country: "PT"
+      - extraction_class: "EMAIL_ADDRESS"
+        extraction_text: "suporte@banco.pt"
+        attributes:
+          type: "email_address"
+
+  # 9) Organização + pessoa (saúde)
+  - text: "Consulta no Hospital de Santa Maria com o Dr. Pedro Almeida."
+    extractions:
+      - extraction_class: "ORGANIZATION"
+        extraction_text: "Hospital de Santa Maria"
+        attributes:
+          type: "hospital"
+      - extraction_class: "PERSON"
+        extraction_text: "Dr. Pedro Almeida"
+        attributes:
+          type: "healthcare_provider"
+
+  # 10) Localização (rua + cidade)
+  - text: "O doente reside na Rua da Liberdade 45 no Porto."
+    extractions:
+      - extraction_class: "LOCATION"
+        extraction_text: "Rua da Liberdade 45"
+        attributes:
+          type: "street_address"
+      - extraction_class: "LOCATION"
+        extraction_text: "Porto"
+        attributes:
+          type: "city"
+
+  # 11) Número de cédula profissional (licença médica)
+  - text: "Assinado pelo Dr. Rui Marques, cédula profissional n.º 12345."
+    extractions:
+      - extraction_class: "PERSON"
+        extraction_text: "Dr. Rui Marques"
+        attributes:
+          type: "healthcare_provider"
+      - extraction_class: "MEDICAL_LICENSE"
+        extraction_text: "12345"
+        attributes:
+          type: "medical_license_number"
+          country: "PT"
+
+  # 12) Pessoa + localização (cidade, distrito)
+  - text: "Ana Ferreira mora em Coimbra, distrito de Coimbra."
+    extractions:
+      - extraction_class: "PERSON"
+        extraction_text: "Ana Ferreira"
+        attributes:
+          type: "full_name"
+      - extraction_class: "LOCATION"
+        extraction_text: "Coimbra, distrito de Coimbra"
+        attributes:
+          type: "city_region"
+
+  # 13) Datas múltiplas
+  - text: "Internado a 2024-03-15 e teve alta a 2024-03-20."
+    extractions:
+      - extraction_class: "DATE_TIME"
+        extraction_text: "2024-03-15"
+        attributes:
+          type: "admission_date"
+          format: "YYYY-MM-DD"
+      - extraction_class: "DATE_TIME"
+        extraction_text: "2024-03-20"
+        attributes:
+          type: "discharge_date"
+          format: "YYYY-MM-DD"

@@ -12,38 +12,99 @@ the result ZIP.
 
 ## 1. Install
 
-### 1.1 System dependencies
+Tested on Linux (Debian/Ubuntu) and macOS (Apple Silicon). Windows is not
+supported directly — use WSL2 with the Debian/Ubuntu instructions below.
+
+### 1.0 Prerequisites
+
+- **Git**
+  ```bash
+  # Debian / Ubuntu
+  sudo apt install git
+  # macOS (via Homebrew, if not already present)
+  brew install git
+  ```
+- **Python 3.10 or newer**, with the `venv` and `pip` modules. On a fresh
+  Ubuntu install the standalone modules ship in separate packages:
+  ```bash
+  # Debian / Ubuntu
+  sudo apt install python3 python3-venv python3-pip
+  # macOS ships a working Python, but a Homebrew install is more predictable:
+  brew install python
+  ```
+
+### 1.1 Clone the repository
+
+```bash
+git clone <this-repo-url> pdf-redactor
+cd pdf-redactor
+```
+
+### 1.2 System dependencies
 
 Two things `pip` cannot install for you:
 
 - **Tesseract OCR** — needed by `pytesseract` for redacting scanned/image PDFs.
+  The base package covers English; install the Spanish and Portuguese
+  language packs too so the `language=es`/`pt` jobs OCR correctly.
   ```bash
   # Debian / Ubuntu
-  sudo apt install tesseract-ocr
-  # macOS
-  brew install tesseract
+  sudo apt install tesseract-ocr tesseract-ocr-eng tesseract-ocr-spa tesseract-ocr-por
+  # macOS (Homebrew's `tesseract` formula ships only eng/osd; language packs
+  # live in the separate `tesseract-lang` formula)
+  brew install tesseract tesseract-lang
   ```
+  For European Portuguese, Tesseract's generic `por` traineddata is used
+  (`por_BR` is Brazilian; not needed here).
 - **Ollama** (only if you plan to run with `use_llm=true`) — the LangExtract
-  recognizer talks to a local LLM. Install from <https://ollama.com>, then:
+  recognizer talks to a local LLM.
+  ```bash
+  # Linux
+  curl -fsSL https://ollama.com/install.sh | sh
+  # macOS (Homebrew, or download the app from https://ollama.com)
+  brew install ollama
+  ```
+  Then pull the model the config points at:
   ```bash
   ollama pull gemma3:12b
   ```
-  Adjust `model_url` in [`src/config/ollama_config.yaml`](src/config/ollama_config.yaml)
-  if Ollama is not reachable at `http://ollama:11434` (e.g. use
-  `http://localhost:11434` for a local install).
+  Adjust `model_url` in the per-language configs under
+  [`src/config/`](src/config/) (`ollama_config.en.yaml`,
+  `ollama_config.es.yaml`, `ollama_config.pt.yaml`) if Ollama is not
+  reachable at `http://ollama:11434` (e.g. use `http://localhost:11434`
+  for a local install).
 
-### 1.2 Python dependencies
+### 1.3 Python dependencies
+
+Create and activate a virtual environment, then install everything:
 
 ```bash
-# from the repo root, inside your venv
+# from the repo root
+python3 -m venv .venv
+source .venv/bin/activate   # Linux / macOS
+
+pip install --upgrade pip
 pip install -r requirements.txt
 python -m spacy download en_core_web_lg
+python -m spacy download es_core_news_lg
+python -m spacy download pt_core_news_lg
 ```
 
 `requirements.txt` covers both the HTTP layer (FastAPI, uvicorn,
 python-multipart) and the redactor itself (Presidio, PyMuPDF, LangExtract,
-openpyxl, …). The spaCy model is a separate download because it is not a
-regular PyPI package.
+openpyxl, …). The three spaCy models (English, Spanish, Portuguese) are
+separate downloads because they are not regular PyPI packages; the analyzer
+is built once at startup with all three loaded and picks the right one per
+job based on the `language` form field. spaCy ships a single Portuguese
+model (`pt_core_news_lg`) that covers both European and Brazilian variants.
+
+The roughly ~2 GB of spaCy models (~570 MB each) are downloaded from
+PyPI; expect a few minutes on a slow connection.
+
+> **PyInstaller bundling.** [`bundle_tesseract.sh`](bundle_tesseract.sh)
+> vendors Tesseract into `tesseract_bin/` for [`PDFRedactor.spec`](PDFRedactor.spec).
+> It uses Homebrew and `dylibbundler` and is **macOS-only**; on Linux you
+> would need a distro-specific packaging step (out of scope here).
 
 ---
 
@@ -261,7 +322,7 @@ with open(f"{job_id}.zip", "wb") as out:
 | Field       | Type            | Default | Notes                                                                   |
 | ----------- | --------------- | ------- | ----------------------------------------------------------------------- |
 | `files`     | `UploadFile[]`  | —       | One or more PDFs. `.pdf` extension **or** `application/pdf` MIME type   |
-| `language`  | `str`           | `"en"`  | Language code passed to Presidio                                        |
+| `language`  | `str`           | `"en"`  | One of `en`, `es`, `pt` (European Portuguese). Selects the spaCy model, the Tesseract OCR dictionary, and the LangExtract prompt/examples. |
 | `use_llm`   | `bool`          | `true`  | Toggle the `BasicLangExtractRecognizer` LLM-backed pass                 |
 
 ## 7. Status codes

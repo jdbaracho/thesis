@@ -91,7 +91,13 @@ def get_redactor(language: str, use_llm: bool):  # noqa: ANN201 - forward ref
     Imports are lazy so that importing this module (e.g. for tests) does not
     require the heavy Presidio / PyMuPDF stack.
     """
-    from src.pdf_redactor import PDFRedactor  # local import: heavy deps
+    from src.pdf_redactor import LANGUAGE_CONFIG, PDFRedactor  # local: heavy deps
+
+    if language not in LANGUAGE_CONFIG:
+        raise ValueError(
+            f"Unsupported language {language!r}. "
+            f"Supported: {sorted(LANGUAGE_CONFIG)}"
+        )
 
     logger.info(
         "Building PDFRedactor (language=%s, use_llm=%s)", language, use_llm

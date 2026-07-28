@@ -30,6 +30,23 @@ chmod +x "$OUT/tesseract"
 # Copy tessdata
 cp -R "$TESSDATA_SRC"/. "$OUT/tessdata"/
 
+# Sanity check: the three languages the redactor supports (English, Spanish,
+# European Portuguese) must all have traineddata files. Homebrew's `tesseract`
+# formula ships every language by default, so a missing file usually means a
+# broken install or a stripped-down tessdata directory.
+missing=()
+for lang in eng spa por; do
+    if [[ ! -f "$OUT/tessdata/${lang}.traineddata" ]]; then
+        missing+=("$lang")
+    fi
+done
+if (( ${#missing[@]} > 0 )); then
+    echo "ERROR: missing tessdata for: ${missing[*]}" >&2
+    echo "       Expected files in: $TESSDATA_SRC" >&2
+    echo "       Reinstall tesseract or add the traineddata manually." >&2
+    exit 1
+fi
+
 # Bundle dylibs and rewrite load paths so the binary uses @executable_path/libs/...
 dylibbundler -of -b \
     -x "$OUT/tesseract" \

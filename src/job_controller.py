@@ -138,6 +138,18 @@ async def create_job(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="At least one PDF file is required.",
         )
+    # Validate the language up front so the client gets a 400 instead of the
+    # job failing asynchronously deep inside the analyzer builder.
+    from src.pdf_redactor import LANGUAGE_CONFIG
+
+    if language not in LANGUAGE_CONFIG:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Unsupported language {language!r}. "
+                f"Supported: {sorted(LANGUAGE_CONFIG)}"
+            ),
+        )
     for upload in files:
         validate_pdf_upload(upload)
 

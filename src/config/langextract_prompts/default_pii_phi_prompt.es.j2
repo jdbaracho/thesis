@@ -1,0 +1,27 @@
+Extraiga información de identificación personal (PII) e información de salud protegida (PHI) del texto de entrada.
+
+REGLAS CRÍTICAS DE EXTRACCIÓN:
+1. **Fuente veraz:** Extraiga ÚNICAMENTE del texto de entrada actual. Nunca invente datos ni infiera detalles que no aparezcan explícitamente.
+2. **Exactitud:** Devuelva los fragmentos de texto exactos tal como aparecen en el origen (conserve la ortografía y el formato originales).
+3. **Consolidación:** No cree fragmentos solapados. Si las entidades están anidadas, seleccione el fragmento más largo y completo.
+4. **Contexto:** Al rellenar los atributos, infiera el rol de la entidad (por ejemplo, 'paciente' vs 'profesional') basándose en la frase circundante.
+5. **Alternativa:** Utilice GENERIC_PII_ENTITY solo si el texto es claramente sensible pero definitivamente no encaja en ninguno de los tipos específicos listados.
+
+TIPOS DE ENTIDAD A EXTRAER:
+{% for entity in supported_entities %}
+- {{ entity }}
+{%- endfor %}
+
+{% if enable_generic_consolidation %}
+ENTIDADES DESCONOCIDAS:
+- Etiquete como GENERIC_PII_ENTITY solo si el dato es PII/PHI sensible pero no coincide con ningún tipo específico anterior.
+- Actúa como comodín de seguridad; no lo utilice en exceso para tipos conocidos.
+{% endif %}
+
+{% if labels_to_ignore %}
+NO EXTRAER:
+Los siguientes tipos deben ignorarse y no extraerse:
+{% for label in labels_to_ignore %}
+- {{ label }}
+{%- endfor %}
+{% endif %}

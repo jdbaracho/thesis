@@ -1,0 +1,163 @@
+# Ejemplos de extracción de PII/PHI con LangExtract para Presidio
+# Se usan los nombres de entidad de Presidio en mayúsculas (idioma-agnósticos)
+
+examples:
+  # 1) Persona + correo electrónico + teléfono
+  - text: "Me llamo Juan García y mi correo es juan.garcia@ejemplo.es. Llámame al 91 234 56 78."
+    extractions:
+      - extraction_class: "PERSON"
+        extraction_text: "Juan García"
+        attributes:
+          type: "full_name"
+      - extraction_class: "EMAIL_ADDRESS"
+        extraction_text: "juan.garcia@ejemplo.es"
+        attributes:
+          type: "email_address"
+      - extraction_class: "PHONE_NUMBER"
+        extraction_text: "91 234 56 78"
+        attributes:
+          type: "phone_number"
+          region: "ES"
+
+  # 2) Dirección postal
+  - text: "Enviar a Calle Alcalá 45, 3.º B, 28014 Madrid."
+    extractions:
+      - extraction_class: "LOCATION"
+        extraction_text: "Calle Alcalá 45, 3.º B, 28014 Madrid"
+        attributes:
+          type: "street_address"
+
+  # 3) Fecha de nacimiento
+  - text: "Fecha de nacimiento: 15/01/1980."
+    extractions:
+      - extraction_class: "DATE_TIME"
+        extraction_text: "15/01/1980"
+        attributes:
+          type: "date_of_birth"
+          format: "DD/MM/YYYY"
+
+  # 4) Variantes de tarjeta de crédito
+  - text: "Utilice la tarjeta 4532123412341234 o 4532-1234-1234-1234."
+    extractions:
+      - extraction_class: "CREDIT_CARD"
+        extraction_text: "4532123412341234"
+        attributes:
+          type: "credit_card_number"
+      - extraction_class: "CREDIT_CARD"
+        extraction_text: "4532-1234-1234-1234"
+        attributes:
+          type: "credit_card_number"
+
+  # 5) Correo con etiqueta plus + organización
+  - text: "Contactar con maria.ruiz+facturacion@sub.acme-esp.es en Acme España."
+    extractions:
+      - extraction_class: "EMAIL_ADDRESS"
+        extraction_text: "maria.ruiz+facturacion@sub.acme-esp.es"
+        attributes:
+          type: "email_address"
+      - extraction_class: "ORGANIZATION"
+        extraction_text: "Acme España"
+        attributes:
+          type: "company"
+
+  # 6) Formatos internacionales de teléfono
+  - text: "Oficina de Barcelona: +34 93 555 12 34; oficina de Londres: +44 20 7946 0958."
+    extractions:
+      - extraction_class: "PHONE_NUMBER"
+        extraction_text: "+34 93 555 12 34"
+        attributes:
+          type: "phone_number"
+          region: "ES"
+      - extraction_class: "PHONE_NUMBER"
+        extraction_text: "+44 20 7946 0958"
+        attributes:
+          type: "phone_number"
+          region: "GB"
+
+  # 7) Direcciones IP
+  - text: "Servidores de la empresa: 192.168.1.100 y fe80::1ff:fe23:4567:890a."
+    extractions:
+      - extraction_class: "IP_ADDRESS"
+        extraction_text: "192.168.1.100"
+        attributes:
+          type: "ipv4"
+      - extraction_class: "IP_ADDRESS"
+        extraction_text: "fe80::1ff:fe23:4567:890a"
+        attributes:
+          type: "ipv6"
+
+  # 8) IBAN + correo de soporte
+  - text: "Realice la transferencia al IBAN ES91 2100 0418 4502 0005 1332. Contacto: soporte@banco.es."
+    extractions:
+      - extraction_class: "IBAN_CODE"
+        extraction_text: "ES91 2100 0418 4502 0005 1332"
+        attributes:
+          type: "iban"
+          country: "ES"
+      - extraction_class: "EMAIL_ADDRESS"
+        extraction_text: "soporte@banco.es"
+        attributes:
+          type: "email_address"
+
+  # 9) Organización + persona (sanidad)
+  - text: "Atendido en el Hospital Clínico de Barcelona por la Dra. Ana Serrano."
+    extractions:
+      - extraction_class: "ORGANIZATION"
+        extraction_text: "Hospital Clínico de Barcelona"
+        attributes:
+          type: "hospital"
+      - extraction_class: "PERSON"
+        extraction_text: "Dra. Ana Serrano"
+        attributes:
+          type: "healthcare_provider"
+
+  # 10) Localización (calle + ciudad)
+  - text: "El paciente reside en Calle Mayor 12 en Sevilla."
+    extractions:
+      - extraction_class: "LOCATION"
+        extraction_text: "Calle Mayor 12"
+        attributes:
+          type: "street_address"
+      - extraction_class: "LOCATION"
+        extraction_text: "Sevilla"
+        attributes:
+          type: "city"
+
+  # 11) Número de colegiado (licencia médica)
+  - text: "Firmado por el Dr. Luis Martín, número de colegiado 28/45123."
+    extractions:
+      - extraction_class: "PERSON"
+        extraction_text: "Dr. Luis Martín"
+        attributes:
+          type: "healthcare_provider"
+      - extraction_class: "MEDICAL_LICENSE"
+        extraction_text: "28/45123"
+        attributes:
+          type: "medical_license_number"
+          country: "ES"
+
+  # 12) Persona + localización (ciudad, comunidad autónoma)
+  - text: "Laura Fernández vive en Valencia, Comunidad Valenciana."
+    extractions:
+      - extraction_class: "PERSON"
+        extraction_text: "Laura Fernández"
+        attributes:
+          type: "full_name"
+      - extraction_class: "LOCATION"
+        extraction_text: "Valencia, Comunidad Valenciana"
+        attributes:
+          type: "city_region"
+
+  # 13) Fechas múltiples
+  - text: "Ingresado el 2024-03-15 y dado de alta el 2024-03-20."
+    extractions:
+      - extraction_class: "DATE_TIME"
+        extraction_text: "2024-03-15"
+        attributes:
+          type: "admission_date"
+          format: "YYYY-MM-DD"
+      - extraction_class: "DATE_TIME"
+        extraction_text: "2024-03-20"
+        attributes:
+          type: "discharge_date"
+          format: "YYYY-MM-DD"

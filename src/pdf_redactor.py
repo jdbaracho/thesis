@@ -8,9 +8,9 @@ table describing every detected entity.
 
 from __future__ import annotations
 
+import functools
 import io
 import logging
-import os
 import re
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple, TypedDict
@@ -19,6 +19,7 @@ import fitz  # PyMuPDF
 from PIL import Image, ImageDraw, ImageFont
 
 from presidio_analyzer import AnalyzerEngine, RecognizerResult
+from presidio_analyzer.nlp_engine import NlpEngineProvider
 from presidio_analyzer.predefined_recognizers.third_party.basic_langextract_recognizer import (
     BasicLangExtractRecognizer,
 )
@@ -31,13 +32,93 @@ from src.presidio_extensions.presidio_utils import resolve_conflicts
 logger = logging.getLogger(__name__)
 
 
-#: Absolute path to the default LangExtract config, resolved against this
-#: module's location so callers can run from any working directory.
-DEFAULT_CONFIG_PATH: str = str(
-    Path(__file__).resolve().parent
-    / "config"
-    / "ollama_config.yaml"
-)
+#: Directory holding per-language LangExtract configs.
+_CONFIG_DIR: Path = Path(__file__).resolve().parent / "config"
+
+
+#: Per-language wiring for the redactor. Keys are the ISO codes exposed by the
+#: web UI. ``spacy_model`` is the model name loaded into Presidio's spaCy NLP
+#: engine; ``tesseract_lang`` is the code passed to ``pytesseract`` for OCR;
+#: ``config_path`` is the LangExtract YAML used to build a language-specific
+#: :class:`BasicLangExtractRecognizer`.
+#:
+#: Portuguese: spaCy ships a single ``pt_core_news_lg`` covering both
+#: variants; Tesseract's ``por`` traineddata is European Portuguese
+#: (``por_BR`` is Brazilian), so we use ``por`` here.
+LANGUAGE_CONFIG: Dict[str, Dict[str, str]] = {
+    "en": {
+        "spacy_model": "en_core_web_lg",
+        "tesseract_lang": "eng",
+        "config_path": str(_CONFIG_DIR / "ollama_config.en.yaml"),
+    },
+    "es": {
+        "spacy_model": "es_core_news_lg",
+        "tesseract_lang": "spa",
+        "config_path": str(_CONFIG_DIR / "ollama_config.es.yaml"),
+    },
+    "pt": {
+        "spacy_model": "pt_core_news_lg",
+        "tesseract_lang": "por",
+        "config_path": str(_CONFIG_DIR / "ollama_config.pt.yaml"),
+    },
+}
+
+#: Absolute path to the default LangExtract config. Retained for backward
+#: compatibility with callers that imported it directly; new code should
+#: index :data:`LANGUAGE_CONFIG` instead.
+DEFAULT_CONFIG_PATH: str = LANGUAGE_CONFIG["en"]["config_path"]
+
+
+@functools.lru_cache(maxsize=None)
+def _build_analyzer(use_llm: bool) -> AnalyzerEngine:
+    """Return a multi-lingual :class:`AnalyzerEngine` shared across languages.
+
+    Loads every spaCy model listed in :data:`LANGUAGE_CONFIG` into a single
+    Presidio ``NlpEngine`` and, when ``use_llm`` is true, registers one
+    :class:`BasicLangExtractRecognizer` per language (each with its own
+    ``supported_language`` and per-language ``config_path``).
+
+    Cached on ``use_llm`` so the heavy spaCy load happens once per process.
+    Missing spaCy models surface as a :class:`RuntimeError` naming the exact
+    ``python -m spacy download`` command required.
+    """
+    languages = sorted(LANGUAGE_CONFIG.keys())
+    nlp_configuration = {
+        "nlp_engine_name": "spacy",
+        "models": [
+            {"lang_code": lang, "model_name": LANGUAGE_CONFIG[lang]["spacy_model"]}
+            for lang in languages
+        ],
+    }
+    logger.info(
+        "Building AnalyzerEngine (languages=%s, use_llm=%s)", languages, use_llm
+    )
+    try:
+        nlp_engine = NlpEngineProvider(
+            nlp_configuration=nlp_configuration
+        ).create_engine()
+    except OSError as exc:
+        missing = ", ".join(
+            f"python -m spacy download {LANGUAGE_CONFIG[lang]['spacy_model']}"
+            for lang in languages
+        )
+        raise RuntimeError(
+            f"Failed to load spaCy models for {languages}: {exc}. "
+            f"Run: {missing}"
+        ) from exc
+
+    analyzer = AnalyzerEngine(
+        nlp_engine=nlp_engine, supported_languages=languages
+    )
+    if use_llm:
+        for lang in languages:
+            analyzer.registry.add_recognizer(
+                BasicLangExtractRecognizer(
+                    config_path=LANGUAGE_CONFIG[lang]["config_path"],
+                    supported_language=lang,
+                )
+            )
+    return analyzer
 
 
 class TranslationEntry(TypedDict):
@@ -95,37 +176,36 @@ class PDFRedactor:
     ----------
     analyzer:
         Pre-configured Presidio `AnalyzerEngine`. When ``None`` (default) a
-        new engine is built and, if ``use_llm`` is ``True``, a
-        `BasicLangExtractRecognizer` is registered using ``config_path``.
+        multi-lingual engine built by :func:`_build_analyzer` is used
+        (shared across all instances with the same ``use_llm``).
     image_analyzer:
         Pre-configured `CustomImageAnalyzerEngine`. When ``None`` (default)
         one is built on top of ``self.analyzer``.
-    config_path:
-        Path to the YAML config used to construct the default
-        `BasicLangExtractRecognizer`. Ignored when ``analyzer`` is provided
-        or when ``use_llm`` is ``False``.
     use_llm:
-        When ``True`` (default), register a `BasicLangExtractRecognizer` on
-        the default analyzer. Ignored when ``analyzer`` is provided.
+        When ``True`` (default), each supported language gets a
+        `BasicLangExtractRecognizer` registered on the default analyzer.
+        Ignored when ``analyzer`` is provided.
     language:
-        Language code passed to the analyzer for text detection. Defaults to
-        ``"en"``.
+        Language code passed to the analyzer for text detection and to
+        Tesseract for OCR. Must be a key of :data:`LANGUAGE_CONFIG`
+        (currently ``"en"``, ``"es"``, ``"pt"``). Defaults to ``"en"``.
     """
 
     def __init__(
         self,
         analyzer: Optional[AnalyzerEngine] = None,
         image_analyzer: Optional[CustomImageAnalyzerEngine] = None,
-        config_path: "str | os.PathLike[str]" = DEFAULT_CONFIG_PATH,
         use_llm: bool = True,
         language: str = "en",
     ) -> None:
+        if language not in LANGUAGE_CONFIG:
+            raise ValueError(
+                f"Unsupported language {language!r}. "
+                f"Supported: {sorted(LANGUAGE_CONFIG)}"
+            )
+
         if analyzer is None:
-            analyzer = AnalyzerEngine()
-            if use_llm:
-                analyzer.registry.add_recognizer(
-                    BasicLangExtractRecognizer(config_path=str(config_path))
-                )
+            analyzer = _build_analyzer(use_llm)
         self.analyzer = analyzer
 
         if image_analyzer is None:
@@ -133,6 +213,7 @@ class PDFRedactor:
         self.image_analyzer = image_analyzer
 
         self.language = language
+        self.tesseract_lang = LANGUAGE_CONFIG[language]["tesseract_lang"]
 
     # ------------------------------------------------------------------ public
 
@@ -219,7 +300,9 @@ class PDFRedactor:
                 pil_image = Image.open(io.BytesIO(img_data["image"]))
 
                 bboxes, text = self.image_analyzer.analyze(
-                    pil_image, language=self.language
+                    pil_image,
+                    ocr_kwargs={"lang": self.tesseract_lang},
+                    language=self.language,
                 )
             except Exception as exc:  # noqa: BLE001 - log and skip bad images
                 logger.warning(
