@@ -108,7 +108,9 @@ def _build_analyzer(use_llm: bool) -> AnalyzerEngine:
         ) from exc
 
     analyzer = AnalyzerEngine(
-        nlp_engine=nlp_engine, supported_languages=languages
+        nlp_engine=nlp_engine,
+        supported_languages=languages,
+        default_score_threshold=0.8,
     )
     if use_llm:
         for lang in languages:
