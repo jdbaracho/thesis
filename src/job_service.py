@@ -137,8 +137,8 @@ async def create_job(
             dest = slot / safe_name
             await spool_upload(upload, dest)
             input_paths.append(dest)
-    except Exception:
-        # Upload failed halfway through — cancel the job and re-raise.
+    except Exception:  # noqa: BLE001
+        # Clean up partial job on any upload failure, then re-raise.
         job_repository.delete(job.id)
         raise
 
@@ -188,7 +188,7 @@ def _redact_one(
             doc.close()
         save_translation_table_xlsx(translation_table, str(xlsx_out))
         return [pdf_out, xlsx_out]
-    except Exception as exc:  # noqa: BLE001 - convert to error artefact
+    except Exception as exc:  # noqa: BLE001 - per-file resilience: one bad PDF must not fail the whole job
         logger.exception("Failed to redact %s", input_path)
         error_path = output_dir / f"{stem}_error.txt"
         error_path.write_text(
@@ -251,7 +251,7 @@ def _process_job(
             result_path=zip_path,
         )
         logger.info("Job %s completed (%d artefacts)", job_id, len(artefacts))
-    except Exception as exc:  # noqa: BLE001 - top-level worker guard
+    except Exception as exc:  # noqa: BLE001 - top-level worker guard: any unrecoverable error marks job FAILED
         logger.exception("Job %s failed", job_id)
         job_repository.update(
             job_id,

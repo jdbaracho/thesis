@@ -232,7 +232,7 @@ class PDFRedactor:
         processed_xrefs: Set[int] = set()
 
         for page in doc:
-            print(f"Analyzing page {page.number + 1}/{len(doc)}...")
+            logger.info("Analyzing page %s/%s", page.number + 1, len(doc))
             self._analyze_page_text(page, translation_table, pending_redactions)
             self._analyze_page_images(
                 page,
@@ -298,19 +298,32 @@ class PDFRedactor:
             try:
                 img_data = doc.extract_image(xref)
                 pil_image = Image.open(io.BytesIO(img_data["image"]))
+            except (OSError, KeyError, RuntimeError) as exc:
+                # Narrow: extract_image can raise RuntimeError/KeyError for
+                # malformed xrefs; PIL raises UnidentifiedImageError (OSError)
+                # for unsupported/corrupt image streams.
+                logger.warning(
+                    "Skipping unreadable image xref %s on page %s: %s",
+                    xref,
+                    page.number,
+                    exc,
+                )
+                continue
 
+            try:
                 bboxes, text = self.image_analyzer.analyze(
                     pil_image,
                     ocr_kwargs={"lang": self.tesseract_lang},
                     language=self.language,
                 )
-            except Exception as exc:  # noqa: BLE001 - log and skip bad images
+            except Exception as exc:  # noqa: BLE001 - OCR/Presidio pipeline is opaque; log and skip
                 logger.warning(
-                    "Skipping image xref %s on page %s: %s",
+                    "OCR failed on image xref %s on page %s: %s",
                     xref,
                     page.number,
                     exc,
                 )
+                pil_image.close()
                 continue
 
             self._process_results(bboxes, text, translation_table)

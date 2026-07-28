@@ -1,10 +1,16 @@
 """Tkinter GUI for batch PDF redaction using Presidio + PyMuPDF."""
 
+# Register narrow warning suppressions before importing heavy third-party deps.
+# Overridden by the PDF_REDACTOR_WARNINGS audit hook in main().
+from src import warning_filters  # noqa: F401
+
 import io
+import logging
 import os
 import sys
 import threading
 import traceback
+import warnings
 from pathlib import Path
 from typing import List
 from tkinter import Tk, BooleanVar, Listbox, StringVar, filedialog, messagebox, scrolledtext
@@ -30,8 +36,10 @@ def _configure_tesseract() -> None:
         try:
             import pytesseract  # noqa: WPS433
             pytesseract.pytesseract.tesseract_cmd = str(bundled_bin)
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - logger not yet configured; surface to stderr
+            sys.stderr.write(
+                f"WARNING: failed to configure bundled tesseract at {bundled_bin}: {exc}\n"
+            )
         if bundled_tessdata.exists():
             os.environ["TESSDATA_PREFIX"] = str(bundled_tessdata)
 
@@ -44,7 +52,7 @@ from presidio_analyzer import AnalyzerEngine, RecognizerResult  # noqa: E402
 from openpyxl import Workbook  # noqa: E402
 from openpyxl.styles import Alignment, Font  # noqa: E402
 
-from custom_extensions.custom_image_analyzer import CustomImageRedactorEngine  # noqa: E402
+from src.presidio_extensions.custom_image_analyzer import CustomImageAnalyzerEngine  # noqa: E402
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -103,55 +111,82 @@ def _save_translation_table(translation_table: dict, output_xlsx: Path) -> None:
     wb.save(str(output_xlsx))
 
 
+def _redact_page_images(
+    page,
+    doc: "fitz.Document",
+    page_idx: int,
+    image_redactor: CustomImageAnalyzerEngine,
+    translation_table: dict,
+    log,
+) -> None:
+    """OCR + redact every image on ``page``; failures are logged and skipped."""
+    for img_info in page.get_images(full=True):
+        xref = img_info[0]
+        try:
+            img_data = doc.extract_image(xref)
+            pil_image = Image.open(io.BytesIO(img_data["image"]))
+            redacted_pil, image_results, image_text = image_redactor.redact(
+                pil_image, (0, 0, 0)
+            )
+            _process_results(image_results, image_text, translation_table)
+            buf = io.BytesIO()
+            redacted_pil.save(buf, format="PNG")
+            page.replace_image(xref, stream=buf.getvalue())
+        except Exception as exc:  # noqa: BLE001 - per-image resilience: skip corrupt/unsupported images
+            log(f"  ! image xref={xref} on page {page_idx} skipped: {exc}")
+
+
+def _redact_span(
+    page,
+    span: dict,
+    analyzer: AnalyzerEngine,
+    translation_table: dict,
+) -> None:
+    """Analyse a single text span and queue redaction rects for detected entities."""
+    chars = span.get("chars", [])
+    text = "".join(c["c"] for c in chars)
+    if not text.strip() or not chars:
+        return
+
+    results = analyzer.analyze(text=text, language="en")
+    _process_results(results, text, translation_table)
+    for result in results:
+        matched_chars = chars[result.start:result.end]
+        if not matched_chars:
+            continue
+        x0 = min(c["bbox"][0] for c in matched_chars)
+        y0 = min(c["bbox"][1] for c in matched_chars)
+        x1 = max(c["bbox"][2] for c in matched_chars)
+        y1 = max(c["bbox"][3] for c in matched_chars)
+        page.add_redact_annot(fitz.Rect(x0, y0, x1, y1), fill=(0, 0, 0))
+
+
+def _redact_page_text(
+    page,
+    analyzer: AnalyzerEngine,
+    translation_table: dict,
+) -> None:
+    """Iterate every text span on ``page`` and hand each to :func:`_redact_span`."""
+    text_dict = page.get_text("rawdict")
+    for block in text_dict["blocks"]:
+        if block.get("type") != 0:
+            continue
+        for line in block["lines"]:
+            for span in line["spans"]:
+                _redact_span(page, span, analyzer, translation_table)
+
+
 def redact_pdf(input_path: Path, output_path: Path, analyzer: AnalyzerEngine,
-               image_redactor: CustomImageRedactorEngine, log) -> dict:
+               image_redactor: CustomImageAnalyzerEngine, log) -> dict:
     """Redact a single PDF file (text + images) and return its translation table."""
     doc = fitz.open(str(input_path))
     translation_table: dict = {}
 
     for page_idx, page in enumerate(doc, start=1):
-        # --- Redact images ---
-        for img_info in page.get_images(full=True):
-            xref = img_info[0]
-            try:
-                img_data = doc.extract_image(xref)
-                pil_image = Image.open(io.BytesIO(img_data["image"]))
-                redacted_pil, image_results, image_text = image_redactor.redact(
-                    pil_image, (0, 0, 0)
-                )
-                _process_results(image_results, image_text, translation_table)
-                buf = io.BytesIO()
-                redacted_pil.save(buf, format="PNG")
-                page.replace_image(xref, stream=buf.getvalue())
-            except Exception as exc:  # noqa: BLE001
-                log(f"  ! image xref={xref} on page {page_idx} skipped: {exc}")
-
-        # --- Redact text ---
-        text_dict = page.get_text("rawdict")
-        for block in text_dict["blocks"]:
-            if block.get("type") != 0:
-                continue
-            for line in block["lines"]:
-                for span in line["spans"]:
-                    chars = span.get("chars", [])
-                    text = "".join(c["c"] for c in chars)
-                    if not text.strip() or not chars:
-                        continue
-
-                    results = analyzer.analyze(text=text, language="en")
-                    _process_results(results, text, translation_table)
-                    for result in results:
-                        matched_chars = chars[result.start:result.end]
-                        if not matched_chars:
-                            continue
-                        x0 = min(c["bbox"][0] for c in matched_chars)
-                        y0 = min(c["bbox"][1] for c in matched_chars)
-                        x1 = max(c["bbox"][2] for c in matched_chars)
-                        y1 = max(c["bbox"][3] for c in matched_chars)
-                        page.add_redact_annot(
-                            fitz.Rect(x0, y0, x1, y1), fill=(0, 0, 0)
-                        )
-
+        _redact_page_images(
+            page, doc, page_idx, image_redactor, translation_table, log
+        )
+        _redact_page_text(page, analyzer, translation_table)
         page.apply_redactions()
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -328,7 +363,7 @@ class RedactorApp:
             self._set_status("Loading Presidio engines…")
             self._log("Initializing analyzer and image redactor…")
             analyzer = AnalyzerEngine()
-            image_redactor = CustomImageRedactorEngine()
+            image_redactor = CustomImageAnalyzerEngine()
 
             for i, pdf in enumerate(pdfs, start=1):
                 self._set_status(f"Processing {i}/{len(pdfs)}: {pdf.name}")
@@ -344,9 +379,9 @@ class RedactorApp:
                         try:
                             _save_translation_table(translation_table, xlsx_path)
                             self._log(f"  ✓ saved {xlsx_path.name}")
-                        except Exception as exc:  # noqa: BLE001
+                        except Exception as exc:  # noqa: BLE001 - xlsx save failure is non-fatal; log to GUI
                             self._log(f"  ! translation table not saved: {exc}")
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:  # noqa: BLE001 - per-file resilience: one bad PDF must not stop the batch
                     self._log(f"  ✗ failed: {exc}")
                     self._log(traceback.format_exc())
                 self.root.after(0, lambda v=i: self.progress.configure(value=v))
@@ -359,7 +394,7 @@ class RedactorApp:
                     "Done", f"Processed {len(pdfs)} file(s).\nOutput: {out_dir}"
                 ),
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 - worker-thread top-level guard: surface any error to the user
             self._log(traceback.format_exc())
             self._set_status("Error.")
             self.root.after(0, lambda: messagebox.showerror("Error", str(exc)))
@@ -368,6 +403,11 @@ class RedactorApp:
 
 
 def main() -> None:
+    if os.environ.get("PDF_REDACTOR_WARNINGS"):
+        # Dev/audit mode: surface every Python warning via logging.
+        logging.basicConfig(level="INFO")
+        warnings.simplefilter("always")
+        logging.captureWarnings(True)
     os.chdir(SCRIPT_DIR)
     root = Tk()
     RedactorApp(root)

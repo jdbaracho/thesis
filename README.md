@@ -125,6 +125,7 @@ Defaults: `http://127.0.0.1:8000`. Configuration via environment variables:
 | `PORT`                         | `8000`      | Bind port                                                 |
 | `PDF_REDACTOR_API_WORKERS`     | `1`         | Concurrent redaction workers (LLM contention if you raise it) |
 | `PDF_REDACTOR_API_LOG_LEVEL`   | `INFO`      | Logging level                                             |
+| `PDF_REDACTOR_WARNINGS`        | *(unset)*   | Set to any non-empty value to surface every Python warning (deprecations, resource leaks, third-party notices) via the logger. Use when upgrading dependencies. Overrides the narrow suppressions in [`src/warning_filters.py`](src/warning_filters.py). |
 
 Example with a custom port and log level:
 
@@ -370,3 +371,54 @@ leftover workdirs stay on disk (delete manually if needed).
   ≤100 MB PDFs are fine. Gigabyte-scale uploads would need chunked transfer.
 - **`use_llm=false`** is dramatically faster (skips the LangExtract step) but
   has weaker recall.
+
+---
+
+## 10. Upgrading `presidio-anonymizer`
+
+`presidio-anonymizer` is **pinned** in [`requirements.txt`](requirements.txt)
+(currently `==2.2.363`). This is intentional: `resolve_conflicts()` in
+[`src/presidio_extensions/presidio_utils.py`](src/presidio_extensions/presidio_utils.py)
+calls three underscore-prefixed methods on `AnonymizerEngine`
+(`_copy_recognizer_results`, `_remove_conflicts_and_get_text_manipulation_data`,
+`_merge_entities_with_spaces_between`). Presidio does not expose a public
+equivalent, so any upstream refactor can silently break conflict resolution.
+
+An import-time guard in `presidio_utils.py` emits a `DeprecationWarning` when
+the installed version differs from the pinned/tested one, so you don't have to
+remember this on your own.
+
+**To upgrade:**
+
+1. Bump the pin in [`requirements.txt`](requirements.txt) and reinstall:
+   ```bash
+   pip install -r requirements.txt --upgrade
+   ```
+2. Run the app once — the guard will warn:
+   ```
+   DeprecationWarning: presidio-anonymizer <new-version> differs from tested 2.2.363; private API calls in resolve_conflicts() may have moved or changed signature.
+   ```
+3. Open
+   [`src/presidio_extensions/presidio_utils.py`](src/presidio_extensions/presidio_utils.py)
+   and confirm the three private methods still exist on `AnonymizerEngine`
+   with the same signatures. Quick check:
+   ```bash
+   python -c "
+   from presidio_anonymizer import AnonymizerEngine
+   a = AnonymizerEngine()
+   for name in ('_copy_recognizer_results',
+                '_remove_conflicts_and_get_text_manipulation_data',
+                '_merge_entities_with_spaces_between'):
+       print(name, '->', hasattr(a, name))
+   "
+   ```
+   All three must print `True`. If any prints `False`, the API has changed —
+   check the [Presidio changelog](https://github.com/microsoft/presidio/blob/main/CHANGELOG.md)
+   and either adapt `resolve_conflicts()` to the new API or stay on the
+   previous version.
+4. Redact a known-good PDF (any file with overlapping entity spans, e.g. a
+   name near a phone number) and confirm the translation table looks right.
+5. Update `_TESTED_ANONYMIZER_VERSION` in
+   [`src/presidio_extensions/presidio_utils.py`](src/presidio_extensions/presidio_utils.py)
+   to the new version so the guard falls silent again.
+

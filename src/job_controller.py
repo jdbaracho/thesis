@@ -26,11 +26,17 @@ Run locally with::
 
 from __future__ import annotations
 
+# Register narrow warning suppressions before importing heavy third-party deps
+# (Presidio, PyMuPDF, langextract). Overridden by the PDF_REDACTOR_WARNINGS
+# audit hook in _lifespan().
+from src import warning_filters  # noqa: F401
+
 import logging
 import os
+import warnings
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Dict, List
+from typing import Annotated, Dict, List
 
 from fastapi import (
     FastAPI,
@@ -64,6 +70,12 @@ async def _lifespan(_app: "FastAPI"):
         level=os.environ.get("PDF_REDACTOR_API_LOG_LEVEL", "INFO"),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    if os.environ.get("PDF_REDACTOR_WARNINGS"):
+        # Dev/audit mode: surface every Python warning (deprecations, resource
+        # leaks, etc.) via the standard logging handlers instead of stderr.
+        warnings.simplefilter("always")
+        logging.captureWarnings(True)
+        logger.info("PDF_REDACTOR_WARNINGS enabled: routing warnings to logging")
     JOB_ROOT.mkdir(parents=True, exist_ok=True)
     logger.info(
         "PDF Redactor API starting (workers=%d, job_root=%s)",
@@ -113,24 +125,27 @@ async def health() -> Dict[str, str]:
 
 @app.post(
     "/jobs",
-    response_model=JobResponse,
     status_code=status.HTTP_202_ACCEPTED,
     tags=["jobs"],
 )
 async def create_job(
-    files: List[UploadFile] = File(
-        ..., description="One or more PDF files to redact."
-    ),
-    language: str = Form(
-        "en", description="Language code passed to Presidio (default 'en')."
-    ),
-    use_llm: bool = Form(
-        True,
-        description=(
-            "Enable the BasicLangExtractRecognizer. Set to false to skip "
-            "the LLM-backed pass (much faster, weaker recall)."
+    files: Annotated[
+        List[UploadFile],
+        File(description="One or more PDF files to redact."),
+    ],
+    language: Annotated[
+        str,
+        Form(description="Language code passed to Presidio (default 'en')."),
+    ] = "en",
+    use_llm: Annotated[
+        bool,
+        Form(
+            description=(
+                "Enable the BasicLangExtractRecognizer. Set to false to skip "
+                "the LLM-backed pass (much faster, weaker recall)."
+            ),
         ),
-    ),
+    ] = True,
 ) -> JobResponse:
     """Accept one or more PDF uploads and enqueue a redaction job."""
     if not files:
@@ -159,7 +174,7 @@ async def create_job(
     return job.to_response()
 
 
-@app.get("/jobs", response_model=List[JobResponse], tags=["jobs"])
+@app.get("/jobs", tags=["jobs"])
 async def list_jobs() -> List[JobResponse]:
     """Return the current status of every tracked job."""
     return [job.to_response() for job in job_service.list_jobs()]
@@ -172,7 +187,7 @@ async def delete_all_jobs() -> Dict[str, int]:
     return {"deleted": deleted}
 
 
-@app.get("/jobs/{job_id}", response_model=JobResponse, tags=["jobs"])
+@app.get("/jobs/{job_id}", tags=["jobs"])
 async def get_job(job_id: str) -> JobResponse:
     """Return the current status of ``job_id``."""
     job = job_service.get_job(job_id)

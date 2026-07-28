@@ -7,7 +7,7 @@ openpyxl
 pydantic
 pytesseract
 presidio-analyzer
-presidio-anonymizer
+presidio-anonymizer==2.2.363  # pinned: src/presidio_extensions/presidio_utils.py depends on private APIs
 presidio-image-redactor
 langextract
 pyyaml

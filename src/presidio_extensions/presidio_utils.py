@@ -1,8 +1,28 @@
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
 from typing import List
+import warnings
 
 from presidio_analyzer import RecognizerResult
 from presidio_anonymizer import AnonymizerEngine
 from presidio_anonymizer.entities import ConflictResolutionStrategy
+
+# resolve_conflicts() calls three underscore-prefixed methods on AnonymizerEngine
+# (see below). Presidio does not expose a public equivalent, so we depend on the
+# private API. This guard surfaces a warning if the installed version drifts from
+# the tested one, so upgrades don't silently break conflict resolution.
+_TESTED_ANONYMIZER_VERSION = "2.2.363"
+try:
+    _installed_version = _pkg_version("presidio-anonymizer")
+except PackageNotFoundError:
+    _installed_version = "unknown"
+if _installed_version != _TESTED_ANONYMIZER_VERSION:
+    warnings.warn(
+        f"presidio-anonymizer {_installed_version} differs from tested "
+        f"{_TESTED_ANONYMIZER_VERSION}; private API calls in "
+        f"resolve_conflicts() may have moved or changed signature.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
 
 _anonymizer = AnonymizerEngine()
 
