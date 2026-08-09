@@ -106,6 +106,68 @@ PyPI; expect a few minutes on a slow connection.
 > It uses Homebrew and `dylibbundler` and is **macOS-only**; on Linux you
 > would need a distro-specific packaging step (out of scope here).
 
+### 1.4 Verify the install
+
+Run these checks after 1.1–1.3, especially to confirm all **three languages**
+(`en`, `es`, `pt`) are wired up end-to-end. Activate the venv first
+(`source .venv/bin/activate`).
+
+- **Python packages** — everything from `requirements.txt` importable, no
+  broken dependency chains:
+  ```bash
+  pip check
+  python -c "
+  import fastapi, uvicorn, multipart, fitz, PIL, openpyxl, pydantic
+  import pytesseract, presidio_analyzer, presidio_anonymizer
+  import presidio_image_redactor, langextract, yaml, jinja2, spacy
+  print('OK: all packages import')
+  "
+  ```
+
+- **spaCy models** (one per language, used for NER):
+  ```bash
+  python -c "
+  import spacy
+  for m in ['en_core_web_lg', 'es_core_news_lg', 'pt_core_news_lg']:
+      spacy.load(m)
+      print('OK', m)
+  "
+  ```
+  If a model is `MISSING`/raises `[E050]`, install it:
+  ```bash
+  python -m spacy download <model-name>   # e.g. es_core_news_lg
+  ```
+
+- **Tesseract OCR + language packs** (needed for scanned/image PDFs):
+  ```bash
+  tesseract --list-langs
+  ```
+  You should see `eng`, `spa`, `por` (plus `osd`). On Debian/Ubuntu the base
+  `tesseract-ocr` package only ships `eng`+`osd` — the `spa`/`por` traineddata
+  come from separate packages, so a missing `spa`/`por` here is common even
+  after "install" step 1.2. Fix with:
+  ```bash
+  # Debian / Ubuntu
+  sudo apt install tesseract-ocr-spa tesseract-ocr-por
+  # macOS (Homebrew's base `tesseract` formula lacks language packs)
+  brew install tesseract-lang
+  ```
+
+- **Ollama + LLM model** (only needed if you run with `use_llm=true`):
+  ```bash
+  ollama list
+  ```
+  Confirm the model referenced by `model_url`/model name in
+  [`src/config/`](src/config/) (`ollama_config.en.yaml`, `.es.yaml`,
+  `.pt.yaml` — currently `gemma3:12b`) is in the list. If not:
+  ```bash
+  ollama pull gemma3:12b
+  ```
+  If `ollama list` fails to connect, make sure the Ollama service is running
+  (`ollama serve`, or check `systemctl status ollama`) and that the
+  `model_url` in each per-language config actually points at it (default
+  `http://ollama:11434`; use `http://localhost:11434` for a local install).
+
 ---
 
 ## 2. Run
