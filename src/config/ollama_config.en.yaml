@@ -31,6 +31,11 @@ langextract:
     model_id: "gemma3:12b"
     provider:
       name: "ollama"
+      kwargs:
+        # Passed to OllamaLanguageModel(**kwargs). Per-request HTTP timeout in
+        # seconds. Bump this if the model is slow to warm up / respond
+        # (default in langextract's Ollama provider is 120s).
+        timeout: 1200
     model_url: "http://ollama:11434"
     temperature: null
   
