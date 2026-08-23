@@ -50,6 +50,9 @@ class Job:
         Ollama model id used for the LLM pass. ``None`` when ``use_llm``
         is false; otherwise a concrete id (the caller's override, or the
         language's YAML default).
+    name:
+        Optional human-readable label supplied by the client to make the
+        job easier to identify in the UI. Never used by the pipeline.
     """
 
     id: str
@@ -64,6 +67,7 @@ class Job:
     language: str = "en"
     use_llm: bool = True
     model_id: Optional[str] = None
+    name: Optional[str] = None
 
     def to_response(self) -> JobResponse:
         """Serialise this job for JSON responses."""
@@ -83,4 +87,5 @@ class Job:
             language=self.language,
             use_llm=self.use_llm,
             model_id=self.model_id,
+            name=self.name,
         )

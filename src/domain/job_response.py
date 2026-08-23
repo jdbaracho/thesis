@@ -33,3 +33,7 @@ class JobResponse(BaseModel):
         default=None,
         description="Ollama model id used for the LLM pass, if any.",
     )
+    name: Optional[str] = Field(
+        default=None,
+        description="Optional client-supplied label for the job.",
+    )

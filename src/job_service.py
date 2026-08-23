@@ -121,6 +121,7 @@ async def create_job(
     language: str,
     use_llm: bool,
     model_id: Optional[str] = None,
+    name: Optional[str] = None,
 ) -> Job:
     """Create a new job entry, spool uploads to its workdir, and enqueue it."""
     # Resolve to a concrete id so the persisted Job always records what ran.
@@ -132,6 +133,7 @@ async def create_job(
         language=language,
         use_llm=use_llm,
         model_id=resolved_model_id,
+        name=name,
     )
     uploads_dir = job.workdir / "uploads"
     uploads_dir.mkdir(parents=True, exist_ok=True)

@@ -156,6 +156,15 @@ async def create_job(
             ),
         ),
     ] = None,
+    name: Annotated[
+        Optional[str],
+        Form(
+            description=(
+                "Optional human-readable label for the job, shown in the UI. "
+                "Trimmed; blank strings are treated as unset."
+            ),
+        ),
+    ] = None,
 ) -> JobResponse:
     """Accept one or more PDF uploads and enqueue a redaction job."""
     if not files:
@@ -177,11 +186,17 @@ async def create_job(
         )
     if model_id is not None:
         model_id = model_id.strip() or None
+    if name is not None:
+        name = name.strip()[:120] or None
     for upload in files:
         validate_pdf_upload(upload)
 
     job = await job_service.create_job(
-        files=files, language=language, use_llm=use_llm, model_id=model_id
+        files=files,
+        language=language,
+        use_llm=use_llm,
+        model_id=model_id,
+        name=name,
     )
     return job.to_response()
 

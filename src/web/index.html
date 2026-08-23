@@ -75,6 +75,17 @@
 
           <!-- Options -->
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+            <label class="block sm:col-span-2">
+              <span class="text-sm font-medium text-slate-700">Job name <span class="text-slate-400 font-normal">(optional)</span></span>
+              <input
+                id="job-name"
+                type="text"
+                maxlength="120"
+                placeholder="e.g. Q3 candidate CVs"
+                class="mt-1 block w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              />
+              <p class="text-xs text-slate-500 mt-1">Shown in the jobs table to help you identify this batch.</p>
+            </label>
             <label class="block">
               <span class="text-sm font-medium text-slate-700">Document language</span>
               <select
@@ -150,6 +161,7 @@
             <thead class="bg-slate-50 text-slate-600 text-xs uppercase tracking-wide">
               <tr>
                 <th class="text-left font-medium px-4 py-2">Job</th>
+                <th class="text-left font-medium px-4 py-2">Name</th>
                 <th class="text-left font-medium px-4 py-2">Status</th>
                 <th class="text-right font-medium px-4 py-2">Files</th>
                 <th class="text-left font-medium px-4 py-2">Language</th>
@@ -161,7 +173,7 @@
             </thead>
             <tbody id="jobs-tbody" class="divide-y divide-slate-100">
               <tr>
-                <td colspan="8" class="px-4 py-8 text-center text-sm text-slate-500">No jobs yet. Upload some PDFs above.</td>
+                <td colspan="9" class="px-4 py-8 text-center text-sm text-slate-500">No jobs yet. Upload some PDFs above.</td>
               </tr>
             </tbody>
           </table>
@@ -196,12 +208,13 @@
           }
           return r.json();
         },
-        async createJob({ files, language, useLlm, modelId }) {
+        async createJob({ files, language, useLlm, modelId, name }) {
           const fd = new FormData();
           for (const f of files) fd.append("files", f, f.name);
           fd.append("language", language);
           fd.append("use_llm", useLlm ? "true" : "false");
           if (modelId) fd.append("model_id", modelId);
+          if (name) fd.append("name", name);
           const r = await fetch("/jobs", { method: "POST", body: fd });
           if (!r.ok) {
             const detail = await safeDetail(r);
@@ -416,8 +429,10 @@
             language: $("language").value,
             useLlm: $("use-llm").checked,
             modelId: $("model").value,
+            name: $("job-name").value.trim(),
           });
           state.selectedFiles = [];
+          $("job-name").value = "";
           renderFileList();
           await pollJobs(); // immediate refresh so the new row shows up
         } catch (err) {
@@ -446,7 +461,7 @@
         if (jobs.length === 0) {
           tbody.innerHTML = `
             <tr>
-              <td colspan="8" class="px-4 py-8 text-center text-sm text-slate-500">No jobs yet. Upload some PDFs above.</td>
+              <td colspan="9" class="px-4 py-8 text-center text-sm text-slate-500">No jobs yet. Upload some PDFs above.</td>
             </tr>`;
           return;
         }
@@ -464,9 +479,11 @@
         const errorAttr = job.error ? ` title="${escapeHtml(job.error)}"` : "";
         const modelCell = job.use_llm && job.model_id ? job.model_id : "—";
         const languageCell = job.language || "—";
+        const nameCell = job.name ? escapeHtml(job.name) : `<span class="text-slate-400">—</span>`;
         return `
           <tr>
             <td class="px-4 py-3 font-mono text-xs text-slate-600" title="${escapeHtml(job.id || "")}">${escapeHtml(shortId)}</td>
+            <td class="px-4 py-3 text-slate-700 max-w-xs truncate"${job.name ? ` title="${escapeHtml(job.name)}"` : ""}>${nameCell}</td>
             <td class="px-4 py-3">
               <span class="inline-block rounded-full px-2 py-0.5 text-xs font-medium ${statusClass}"${errorAttr}>${escapeHtml(statusLabel)}</span>
               ${job.error ? `<div class="text-xs text-red-600 mt-1 truncate max-w-xs" title="${escapeHtml(job.error)}">${escapeHtml(job.error)}</div>` : ""}
