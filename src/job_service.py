@@ -81,8 +81,8 @@ def shutdown_executor() -> None:
 
 
 @functools.lru_cache(maxsize=None)
-def get_redactor(language: str, use_llm: bool):  # noqa: ANN201 - forward ref
-    """Return a cached :class:`PDFRedactor` for ``(language, use_llm)``.
+def get_redactor(language: str, use_llm: bool, model_id: Optional[str]):  # noqa: ANN201 - forward ref
+    """Return a cached :class:`PDFRedactor` for ``(language, use_llm, model_id)``.
 
     Building the redactor loads the Presidio analyzer and, when ``use_llm`` is
     true, the LangExtract recognizer — both expensive. The cache keeps one
@@ -100,9 +100,10 @@ def get_redactor(language: str, use_llm: bool):  # noqa: ANN201 - forward ref
         )
 
     logger.info(
-        "Building PDFRedactor (language=%s, use_llm=%s)", language, use_llm
+        "Building PDFRedactor (language=%s, use_llm=%s, model_id=%s)",
+        language, use_llm, model_id,
     )
-    return PDFRedactor(use_llm=use_llm, language=language)
+    return PDFRedactor(use_llm=use_llm, language=language, model_id=model_id)
 
 
 def get_job(job_id: str) -> Optional[Job]:
@@ -119,9 +120,19 @@ async def create_job(
     files: List[UploadFile],
     language: str,
     use_llm: bool,
+    model_id: Optional[str] = None,
 ) -> Job:
     """Create a new job entry, spool uploads to its workdir, and enqueue it."""
-    job = job_repository.create(file_count=len(files))
+    # Resolve to a concrete id so the persisted Job always records what ran.
+    from src.pdf_redactor import LANGUAGE_CONFIG  # local: heavy deps
+
+    resolved_model_id = model_id or LANGUAGE_CONFIG[language]["default_model_id"]
+    job = job_repository.create(
+        file_count=len(files),
+        language=language,
+        use_llm=use_llm,
+        model_id=resolved_model_id,
+    )
     uploads_dir = job.workdir / "uploads"
     uploads_dir.mkdir(parents=True, exist_ok=True)
 
@@ -142,7 +153,13 @@ async def create_job(
         job_repository.delete(job.id)
         raise
 
-    _submit_job(job.id, input_paths, language=language, use_llm=use_llm)
+    _submit_job(
+        job.id,
+        input_paths,
+        language=language,
+        use_llm=use_llm,
+        model_id=resolved_model_id,
+    )
     return job
 
 
@@ -161,6 +178,7 @@ def _redact_one(
     output_dir: Path,
     language: str,
     use_llm: bool,
+    model_id: Optional[str],
     output_stem: Optional[str] = None,
 ) -> List[Path]:
     """Redact a single PDF and return the artefact paths that should be zipped.
@@ -179,7 +197,9 @@ def _redact_one(
     xlsx_out = output_dir / f"{stem}_redacted.xlsx"
 
     try:
-        redactor = get_redactor(language=language, use_llm=use_llm)
+        redactor = get_redactor(
+            language=language, use_llm=use_llm, model_id=model_id
+        )
         doc = fitz.open(input_path)
         try:
             doc, translation_table = redactor.redact(doc)
@@ -204,6 +224,7 @@ def _process_job(
     input_paths: List[Path],
     language: str,
     use_llm: bool,
+    model_id: Optional[str],
 ) -> None:
     """Worker entry point: redact every input PDF and produce ``result.zip``.
 
@@ -237,6 +258,7 @@ def _process_job(
                     redacted_dir,
                     language,
                     use_llm,
+                    model_id,
                     output_stem=stem,
                 )
             )
@@ -266,8 +288,9 @@ def _submit_job(
     input_paths: List[Path],
     language: str,
     use_llm: bool,
+    model_id: Optional[str],
 ) -> concurrent.futures.Future:
     """Enqueue ``process_job`` on the module-level executor."""
     return _executor.submit(
-        _process_job, job_id, input_paths, language, use_llm
+        _process_job, job_id, input_paths, language, use_llm, model_id
     )

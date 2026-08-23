@@ -95,6 +95,19 @@
             </label>
           </div>
 
+          <label class="block">
+            <span class="text-sm font-medium text-slate-700">Ollama model</span>
+            <select
+              id="model"
+              disabled
+              class="mt-1 block w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:bg-slate-100 disabled:text-slate-500"
+            >
+              <option>Loading models…</option>
+            </select>
+            <p id="model-error" class="hidden text-xs text-red-700 mt-1"></p>
+            <p id="model-hint" class="text-xs text-slate-500 mt-1">Only used when the LLM pass is enabled. Smaller models are faster; larger ones catch more.</p>
+          </label>
+
           <!-- Errors -->
           <div id="submit-error" class="hidden text-sm bg-red-50 border border-red-200 text-red-700 rounded-md px-3 py-2"></div>
 
@@ -139,6 +152,8 @@
                 <th class="text-left font-medium px-4 py-2">Job</th>
                 <th class="text-left font-medium px-4 py-2">Status</th>
                 <th class="text-right font-medium px-4 py-2">Files</th>
+                <th class="text-left font-medium px-4 py-2">Language</th>
+                <th class="text-left font-medium px-4 py-2">Model</th>
                 <th class="text-left font-medium px-4 py-2">Created</th>
                 <th class="text-left font-medium px-4 py-2">Duration</th>
                 <th class="text-right font-medium px-4 py-2">Actions</th>
@@ -146,7 +161,7 @@
             </thead>
             <tbody id="jobs-tbody" class="divide-y divide-slate-100">
               <tr>
-                <td colspan="6" class="px-4 py-8 text-center text-sm text-slate-500">No jobs yet. Upload some PDFs above.</td>
+                <td colspan="8" class="px-4 py-8 text-center text-sm text-slate-500">No jobs yet. Upload some PDFs above.</td>
               </tr>
             </tbody>
           </table>
@@ -173,11 +188,20 @@
           if (!r.ok) throw new Error(`List jobs ${r.status}`);
           return r.json();
         },
-        async createJob({ files, language, useLlm }) {
+        async listModels() {
+          const r = await fetch("/api/models", { cache: "no-store" });
+          if (!r.ok) {
+            const detail = await safeDetail(r);
+            throw new Error(detail || `List models failed (${r.status})`);
+          }
+          return r.json();
+        },
+        async createJob({ files, language, useLlm, modelId }) {
           const fd = new FormData();
           for (const f of files) fd.append("files", f, f.name);
           fd.append("language", language);
           fd.append("use_llm", useLlm ? "true" : "false");
+          if (modelId) fd.append("model_id", modelId);
           const r = await fetch("/jobs", { method: "POST", body: fd });
           if (!r.ok) {
             const detail = await safeDetail(r);
@@ -216,6 +240,7 @@
         selectedFiles: [],
         jobs: [],
         submitting: false,
+        modelsLoaded: false,
       };
 
       // ---------- DOM helpers ----------
@@ -342,7 +367,7 @@
           return;
         }
         fileListWrapper.classList.remove("hidden");
-        submitBtn.disabled = state.submitting;
+        submitBtn.disabled = state.submitting || !state.modelsLoaded;
         const totalBytes = files.reduce((acc, f) => acc + f.size, 0);
         fileListSummary.textContent = `${files.length} file${files.length === 1 ? "" : "s"} selected · ${fmtBytes(totalBytes)}`;
         fileListEl.innerHTML = files
@@ -373,7 +398,13 @@
 
       // ---------- Submit ----------
       submitBtn.addEventListener("click", async () => {
-        if (state.selectedFiles.length === 0 || state.submitting) return;
+        if (
+          state.selectedFiles.length === 0 ||
+          state.submitting ||
+          !state.modelsLoaded
+        ) {
+          return;
+        }
         state.submitting = true;
         submitBtn.disabled = true;
         $("submit-spinner").classList.remove("hidden");
@@ -384,6 +415,7 @@
             files: state.selectedFiles,
             language: $("language").value,
             useLlm: $("use-llm").checked,
+            modelId: $("model").value,
           });
           state.selectedFiles = [];
           renderFileList();
@@ -394,7 +426,8 @@
           state.submitting = false;
           $("submit-spinner").classList.add("hidden");
           $("submit-label").textContent = "Submit for redaction";
-          submitBtn.disabled = state.selectedFiles.length === 0;
+          submitBtn.disabled =
+            state.selectedFiles.length === 0 || !state.modelsLoaded;
         }
       });
 
@@ -413,7 +446,7 @@
         if (jobs.length === 0) {
           tbody.innerHTML = `
             <tr>
-              <td colspan="6" class="px-4 py-8 text-center text-sm text-slate-500">No jobs yet. Upload some PDFs above.</td>
+              <td colspan="8" class="px-4 py-8 text-center text-sm text-slate-500">No jobs yet. Upload some PDFs above.</td>
             </tr>`;
           return;
         }
@@ -429,6 +462,8 @@
         const statusLabel = STATUS_LABELS[job.status] || job.status;
         const canDownload = job.status === "completed" && job.result_url;
         const errorAttr = job.error ? ` title="${escapeHtml(job.error)}"` : "";
+        const modelCell = job.use_llm && job.model_id ? job.model_id : "—";
+        const languageCell = job.language || "—";
         return `
           <tr>
             <td class="px-4 py-3 font-mono text-xs text-slate-600" title="${escapeHtml(job.id || "")}">${escapeHtml(shortId)}</td>
@@ -437,6 +472,8 @@
               ${job.error ? `<div class="text-xs text-red-600 mt-1 truncate max-w-xs" title="${escapeHtml(job.error)}">${escapeHtml(job.error)}</div>` : ""}
             </td>
             <td class="px-4 py-3 text-right tabular-nums">${job.file_count ?? "—"}</td>
+            <td class="px-4 py-3 text-slate-600 uppercase">${escapeHtml(languageCell)}</td>
+            <td class="px-4 py-3 font-mono text-xs text-slate-600">${escapeHtml(modelCell)}</td>
             <td class="px-4 py-3 text-slate-600">${escapeHtml(fmtDateTime(job.created_at))}</td>
             <td class="px-4 py-3 text-slate-600 tabular-nums">${escapeHtml(fmtDuration(job))}</td>
             <td class="px-4 py-3 text-right whitespace-nowrap">
@@ -539,6 +576,59 @@
         }
       }
 
+      // ---------- Model dropdown ----------
+      const modelSelect = $("model");
+      const modelError = $("model-error");
+      const modelHint = $("model-hint");
+
+      function showModelError(msg) {
+        modelError.textContent = msg;
+        modelError.classList.remove("hidden");
+        modelHint.classList.add("hidden");
+      }
+
+      async function loadModels() {
+        state.modelsLoaded = false;
+        modelSelect.disabled = true;
+        modelSelect.innerHTML = `<option>Loading models…</option>`;
+        modelError.classList.add("hidden");
+        modelHint.classList.remove("hidden");
+        try {
+          const data = await api.listModels();
+          const models = Array.isArray(data.models) ? data.models : [];
+          const groups = new Map();
+          for (const m of models) {
+            const key = m.category || "Other";
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key).push(m);
+          }
+          const groupsHtml = Array.from(groups.entries())
+            .map(([label, items]) => {
+              const opts = items
+                .map((m) => {
+                  const parts = [m.parameter_size, m.disk_size].filter(Boolean);
+                  const suffix = parts.length ? ` (${parts.join(" · ")})` : "";
+                  return `<option value="${escapeHtml(m.id)}">${escapeHtml(m.id)}${escapeHtml(suffix)}</option>`;
+                })
+                .join("");
+              return `<optgroup label="${escapeHtml(label)}">${opts}</optgroup>`;
+            })
+            .join("");
+          modelSelect.innerHTML = groupsHtml;
+          const preferred = data.default_model_id;
+          const hasPreferred =
+            preferred && models.some((m) => m.id === preferred);
+          modelSelect.value = hasPreferred ? preferred : models[0].id;
+          modelSelect.disabled = false;
+          state.modelsLoaded = true;
+          submitBtn.disabled = state.selectedFiles.length === 0;
+        } catch (err) {
+          showModelError(err.message || "Could not load models.");
+          modelSelect.innerHTML = `<option>Unavailable</option>`;
+          submitBtn.disabled = true;
+        }
+      }
+
       // ---------- Boot ----------
       (async () => {
         try {
@@ -547,6 +637,7 @@
         } catch (err) {
           setHealth(false, err.message);
         }
+        await loadModels();
         await pollJobs();
         startPolling();
       })();

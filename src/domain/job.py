@@ -42,6 +42,14 @@ class Job:
     result_path:
         Absolute path to ``result.zip``. Set once the job reaches
         :attr:`JobStatus.COMPLETED`.
+    language:
+        ISO code (``"en"`` / ``"es"`` / ``"pt"``) the job ran with.
+    use_llm:
+        Whether the LangExtract LLM pass was enabled for this job.
+    model_id:
+        Ollama model id used for the LLM pass. ``None`` when ``use_llm``
+        is false; otherwise a concrete id (the caller's override, or the
+        language's YAML default).
     """
 
     id: str
@@ -53,6 +61,9 @@ class Job:
     finished_at: Optional[datetime] = None
     error: Optional[str] = None
     result_path: Optional[Path] = None
+    language: str = "en"
+    use_llm: bool = True
+    model_id: Optional[str] = None
 
     def to_response(self) -> JobResponse:
         """Serialise this job for JSON responses."""
@@ -69,4 +80,7 @@ class Job:
                 if self.status is JobStatus.COMPLETED
                 else None
             ),
+            language=self.language,
+            use_llm=self.use_llm,
+            model_id=self.model_id,
         )

@@ -27,3 +27,9 @@ class JobResponse(BaseModel):
         default=None,
         description="Populated only when status == 'completed'.",
     )
+    language: str = "en"
+    use_llm: bool = True
+    model_id: Optional[str] = Field(
+        default=None,
+        description="Ollama model id used for the LLM pass, if any.",
+    )

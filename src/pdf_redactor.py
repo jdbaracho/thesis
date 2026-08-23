@@ -8,14 +8,18 @@ table describing every detected entity.
 
 from __future__ import annotations
 
+import atexit
 import functools
 import io
 import logging
+import os
 import re
+import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple, TypedDict
 
 import fitz  # PyMuPDF
+import yaml
 from PIL import Image, ImageDraw, ImageFont
 
 from presidio_analyzer import AnalyzerEngine, RecognizerResult
@@ -63,6 +67,72 @@ LANGUAGE_CONFIG: Dict[str, Dict[str, str]] = {
     },
 }
 
+
+def _load_default_model_id(config_path: str) -> str:
+    """Return ``langextract.model.model_id`` from a language YAML."""
+    with open(config_path, "r", encoding="utf-8") as fh:
+        data = yaml.safe_load(fh) or {}
+    model_id = ((data.get("langextract") or {}).get("model") or {}).get("model_id")
+    if not isinstance(model_id, str) or not model_id:
+        raise RuntimeError(
+            f"{config_path} is missing langextract.model.model_id"
+        )
+    return model_id
+
+
+# Populate the default Ollama model id for each language from its YAML.
+for _cfg in LANGUAGE_CONFIG.values():
+    _cfg["default_model_id"] = _load_default_model_id(_cfg["config_path"])
+
+
+#: Cache of temp YAML paths keyed by ``(language, model_id)`` overrides.
+_TEMP_CONFIG_PATHS: Dict[Tuple[str, str], str] = {}
+
+
+def _get_config_path_for(language: str, model_id: Optional[str]) -> str:
+    """Return a YAML config path with ``langextract.model.model_id`` patched.
+
+    When ``model_id`` is ``None`` or equals the language's default, returns
+    the checked-in YAML path unchanged. Otherwise loads the default YAML,
+    patches the model id, writes the result to a cached temp file (one per
+    ``(language, model_id)`` pair), and returns that path.
+    """
+    base_path = LANGUAGE_CONFIG[language]["config_path"]
+    default_id = LANGUAGE_CONFIG[language]["default_model_id"]
+    if not model_id or model_id == default_id:
+        return base_path
+    cache_key = (language, model_id)
+    cached = _TEMP_CONFIG_PATHS.get(cache_key)
+    if cached and Path(cached).exists():
+        return cached
+    with open(base_path, "r", encoding="utf-8") as fh:
+        data = yaml.safe_load(fh) or {}
+    data.setdefault("langextract", {}).setdefault("model", {})["model_id"] = model_id
+    sanitized = re.sub(r"[^A-Za-z0-9._-]", "_", model_id)
+    fd, tmp_path = tempfile.mkstemp(
+        prefix=f"pdf_redactor_ollama_config_{language}_{sanitized}_",
+        suffix=".yaml",
+    )
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        yaml.safe_dump(data, fh, sort_keys=False, allow_unicode=True)
+    _TEMP_CONFIG_PATHS[cache_key] = tmp_path
+    logger.info(
+        "Wrote patched LangExtract config for (%s, %s) -> %s",
+        language, model_id, tmp_path,
+    )
+    return tmp_path
+
+
+@atexit.register
+def _cleanup_temp_configs() -> None:
+    for path in list(_TEMP_CONFIG_PATHS.values()):
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+    _TEMP_CONFIG_PATHS.clear()
+
+
 #: Absolute path to the default LangExtract config. Retained for backward
 #: compatibility with callers that imported it directly; new code should
 #: index :data:`LANGUAGE_CONFIG` instead.
@@ -70,56 +140,52 @@ DEFAULT_CONFIG_PATH: str = LANGUAGE_CONFIG["en"]["config_path"]
 
 
 @functools.lru_cache(maxsize=None)
-def _build_analyzer(use_llm: bool) -> AnalyzerEngine:
-    """Return a multi-lingual :class:`AnalyzerEngine` shared across languages.
+def _build_analyzer(
+    use_llm: bool,
+    language: str,
+    model_id: Optional[str],
+) -> AnalyzerEngine:
+    """Return a cached :class:`AnalyzerEngine` for one ``(use_llm, language, model_id)``.
 
-    Loads every spaCy model listed in :data:`LANGUAGE_CONFIG` into a single
-    Presidio ``NlpEngine`` and, when ``use_llm`` is true, registers one
-    :class:`BasicLangExtractRecognizer` per language (each with its own
-    ``supported_language`` and per-language ``config_path``).
+    Loads the language's spaCy model into a Presidio ``NlpEngine`` and,
+    when ``use_llm`` is true, registers a :class:`BasicLangExtractRecognizer`
+    whose YAML config carries the requested ``model_id`` override (or the
+    default from :data:`LANGUAGE_CONFIG` when ``model_id`` is ``None``).
 
-    Cached on ``use_llm`` so the heavy spaCy load happens once per process.
-    Missing spaCy models surface as a :class:`RuntimeError` naming the exact
+    Missing spaCy models surface as :class:`RuntimeError` naming the exact
     ``python -m spacy download`` command required.
     """
-    languages = sorted(LANGUAGE_CONFIG.keys())
+    spacy_model = LANGUAGE_CONFIG[language]["spacy_model"]
     nlp_configuration = {
         "nlp_engine_name": "spacy",
-        "models": [
-            {"lang_code": lang, "model_name": LANGUAGE_CONFIG[lang]["spacy_model"]}
-            for lang in languages
-        ],
+        "models": [{"lang_code": language, "model_name": spacy_model}],
     }
     logger.info(
-        "Building AnalyzerEngine (languages=%s, use_llm=%s)", languages, use_llm
+        "Building AnalyzerEngine (language=%s, use_llm=%s, model_id=%s)",
+        language, use_llm, model_id,
     )
     try:
         nlp_engine = NlpEngineProvider(
             nlp_configuration=nlp_configuration
         ).create_engine()
     except OSError as exc:
-        missing = ", ".join(
-            f"python -m spacy download {LANGUAGE_CONFIG[lang]['spacy_model']}"
-            for lang in languages
-        )
         raise RuntimeError(
-            f"Failed to load spaCy models for {languages}: {exc}. "
-            f"Run: {missing}"
+            f"Failed to load spaCy model {spacy_model!r} for {language!r}: {exc}. "
+            f"Run: python -m spacy download {spacy_model}"
         ) from exc
 
     analyzer = AnalyzerEngine(
         nlp_engine=nlp_engine,
-        supported_languages=languages,
+        supported_languages=[language],
         default_score_threshold=0.8,
     )
     if use_llm:
-        for lang in languages:
-            analyzer.registry.add_recognizer(
-                BasicLangExtractRecognizer(
-                    config_path=LANGUAGE_CONFIG[lang]["config_path"],
-                    supported_language=lang,
-                )
+        analyzer.registry.add_recognizer(
+            BasicLangExtractRecognizer(
+                config_path=_get_config_path_for(language, model_id),
+                supported_language=language,
             )
+        )
     return analyzer
 
 
@@ -191,6 +257,11 @@ class PDFRedactor:
         Language code passed to the analyzer for text detection and to
         Tesseract for OCR. Must be a key of :data:`LANGUAGE_CONFIG`
         (currently ``"en"``, ``"es"``, ``"pt"``). Defaults to ``"en"``.
+    model_id:
+        Ollama model id (e.g. ``"gemma3:12b"``) that overrides
+        ``langextract.model.model_id`` in the language YAML. When ``None``
+        (default) the value from the checked-in YAML is used unchanged.
+        Ignored when ``analyzer`` is provided or ``use_llm`` is false.
     """
 
     def __init__(
@@ -199,6 +270,7 @@ class PDFRedactor:
         image_analyzer: Optional[CustomImageAnalyzerEngine] = None,
         use_llm: bool = True,
         language: str = "en",
+        model_id: Optional[str] = None,
     ) -> None:
         if language not in LANGUAGE_CONFIG:
             raise ValueError(
@@ -207,7 +279,7 @@ class PDFRedactor:
             )
 
         if analyzer is None:
-            analyzer = _build_analyzer(use_llm)
+            analyzer = _build_analyzer(use_llm, language, model_id)
         self.analyzer = analyzer
 
         if image_analyzer is None:
@@ -215,6 +287,7 @@ class PDFRedactor:
         self.image_analyzer = image_analyzer
 
         self.language = language
+        self.model_id = model_id
         self.tesseract_lang = LANGUAGE_CONFIG[language]["tesseract_lang"]
 
     # ------------------------------------------------------------------ public

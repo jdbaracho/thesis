@@ -65,12 +65,17 @@ class JobRepository:
 
     # -- lifecycle ---------------------------------------------------------- #
 
-    def create(self, file_count: int = 0) -> Job:
-        """Register a new pending job and prepare its workdir."""
+    def create(self, file_count: int = 0, **fields: object) -> Job:
+        """Register a new pending job and prepare its workdir.
+
+        Extra ``**fields`` are forwarded to the :class:`Job` constructor so
+        callers can seed per-job settings (``language``, ``use_llm``,
+        ``model_id``) at creation time.
+        """
         job_id = uuid.uuid4().hex
         workdir = self._root / job_id
         workdir.mkdir(parents=True, exist_ok=False)
-        job = Job(id=job_id, workdir=workdir, file_count=file_count)
+        job = Job(id=job_id, workdir=workdir, file_count=file_count, **fields)
         with self._lock:
             self._jobs[job_id] = job
         logger.info("Job %s created (files=%d)", job_id, file_count)

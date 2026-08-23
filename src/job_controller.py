@@ -36,7 +36,7 @@ import os
 import warnings
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated, Dict, List
+from typing import Annotated, Any, Dict, List, Optional
 
 from fastapi import (
     FastAPI,
@@ -54,6 +54,7 @@ from src import job_service
 from src.domain.job_response import JobResponse
 from src.domain.job_status import JobStatus
 from src.job_repository import JOB_ROOT
+from src.ollama_client import list_models
 from src.utils import validate_pdf_upload
 
 
@@ -146,6 +147,15 @@ async def create_job(
             ),
         ),
     ] = True,
+    model_id: Annotated[
+        Optional[str],
+        Form(
+            description=(
+                "Ollama model id to use for the LLM pass. When omitted, the "
+                "default from the language's YAML config is used."
+            ),
+        ),
+    ] = None,
 ) -> JobResponse:
     """Accept one or more PDF uploads and enqueue a redaction job."""
     if not files:
@@ -165,13 +175,38 @@ async def create_job(
                 f"Supported: {sorted(LANGUAGE_CONFIG)}"
             ),
         )
+    if model_id is not None:
+        model_id = model_id.strip() or None
     for upload in files:
         validate_pdf_upload(upload)
 
     job = await job_service.create_job(
-        files=files, language=language, use_llm=use_llm
+        files=files, language=language, use_llm=use_llm, model_id=model_id
     )
     return job.to_response()
+
+
+@app.get("/api/models", tags=["models"])
+async def list_available_models() -> Dict[str, Any]:
+    """Return the hardcoded list of models the UI offers.
+
+    The response also carries the default ``model_id`` from the English
+    YAML so the UI can preselect it when the user first loads the page.
+    """
+    from src.pdf_redactor import LANGUAGE_CONFIG
+
+    return {
+        "models": [
+            {
+                "id": m.id,
+                "parameter_size": m.parameter_size,
+                "disk_size": m.disk_size,
+                "category": m.category,
+            }
+            for m in list_models()
+        ],
+        "default_model_id": LANGUAGE_CONFIG["en"]["default_model_id"],
+    }
 
 
 @app.get("/jobs", tags=["jobs"])
