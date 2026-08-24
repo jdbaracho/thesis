@@ -1,0 +1,76 @@
+# Curated list of Presidio recognizers used by PDFRedactor.
+#
+# `supported_languages` is overwritten at runtime to the job's language
+# (one of `en` / `es` / `pt`) before the file is handed to
+# `RecognizerRegistryProvider`. Per-recognizer `supported_languages`
+# entries are filtered against the target language, so recognizers scoped
+# to a language the job is not running in are dropped silently.
+#
+# `BasicLangExtractRecognizer` is kept `enabled: false`: PDFRedactor
+# registers it programmatically per AnalyzerMode (`hybrid` or `llm`);
+# leave it disabled here so the recognizer is not added twice.
+
+supported_languages:
+  - en
+  - es
+  - pt
+global_regex_flags: 26
+
+recognizers:
+  # ---- NLP (spaCy NER) ---------------------------------------------------
+  - name: SpacyRecognizer
+    supported_languages:
+      - en
+      - es
+      - pt
+    supported_entities:
+      - PERSON
+      - LOCATION
+      - DATE_TIME
+      - NRP
+    type: predefined
+
+  # ---- Locale-agnostic ---------------------------------------------------
+  - name: CreditCardRecognizer
+    supported_languages:
+      - language: en
+        context: [credit, card, visa, mastercard, cc, amex, discover, jcb, diners, maestro, instapayment]
+      - language: es
+        context: [tarjeta, credito, visa, mastercard, cc, amex, discover, jcb, diners, maestro, instapayment]
+      - language: pt
+        context: [cartão, cartao, crédito, credito, visa, mastercard, cc, amex, discover]
+    type: predefined
+
+  - name: CryptoRecognizer
+    type: predefined
+
+  - name: DateRecognizer
+    type: predefined
+
+  - name: EmailRecognizer
+    type: predefined
+
+  - name: IbanRecognizer
+    type: predefined
+
+  - name: IpRecognizer
+    type: predefined
+
+  - name: MacAddressRecognizer
+    type: predefined
+
+  - name: PhoneRecognizer
+    type: predefined
+
+  - name: UrlRecognizer
+    type: predefined
+
+  # ---- LLM pass ----------------------------------------------------------
+  # Registered programmatically by PDFRedactor for hybrid/llm modes.
+  - name: BasicLangExtractRecognizer
+    supported_languages:
+      - en
+      - es
+      - pt
+    type: predefined
+    enabled: false

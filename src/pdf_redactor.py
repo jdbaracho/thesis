@@ -9,6 +9,7 @@ table describing every detected entity.
 from __future__ import annotations
 
 import atexit
+import copy
 import functools
 import io
 import logging
@@ -16,7 +17,7 @@ import os
 import re
 import tempfile
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple, TypedDict, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, TypedDict, Union
 
 import fitz  # PyMuPDF
 import yaml
@@ -27,6 +28,7 @@ from presidio_analyzer.nlp_engine import NlpEngineProvider
 from presidio_analyzer.predefined_recognizers.third_party.basic_langextract_recognizer import (
     BasicLangExtractRecognizer,
 )
+from presidio_analyzer.recognizer_registry import RecognizerRegistryProvider
 from presidio_image_redactor.entities import ImageRecognizerResult
 
 from src.domain.analyzer_mode import AnalyzerMode
@@ -140,6 +142,50 @@ def _cleanup_temp_configs() -> None:
 DEFAULT_CONFIG_PATH: str = LANGUAGE_CONFIG["en"]["config_path"]
 
 
+#: Curated recognizer set shared by SIMPLE and HYBRID modes.
+_RECOGNIZERS_YAML: Path = _CONFIG_DIR / "recognizers.yaml"
+
+
+def _load_recognizers_config() -> Dict[str, Any]:
+    with open(_RECOGNIZERS_YAML, "r", encoding="utf-8") as fh:
+        data = yaml.safe_load(fh) or {}
+    if not isinstance(data, dict) or "recognizers" not in data:
+        raise RuntimeError(
+            f"{_RECOGNIZERS_YAML} is missing the required 'recognizers' list"
+        )
+    return data
+
+
+_BASE_RECOGNIZERS_CONFIG: Dict[str, Any] = _load_recognizers_config()
+
+
+def _registry_config_for(language: str) -> Dict[str, Any]:
+    """Return a copy of :data:`_BASE_RECOGNIZERS_CONFIG` scoped to ``language``.
+
+    Overrides the top-level ``supported_languages`` and drops per-recognizer
+    language entries that do not match, so ``RecognizerRegistryProvider`` does
+    not warn about recognizers scoped to other languages.
+    """
+    cfg = copy.deepcopy(_BASE_RECOGNIZERS_CONFIG)
+    cfg["supported_languages"] = [language]
+    kept: List[Dict[str, Any]] = []
+    for entry in cfg.get("recognizers", []) or []:
+        langs = entry.get("supported_languages")
+        if langs is None:
+            kept.append(entry)
+            continue
+        if langs and isinstance(langs[0], dict):
+            filtered = [l for l in langs if l.get("language") == language]
+        else:
+            filtered = [l for l in langs if l == language]
+        if not filtered:
+            continue
+        entry["supported_languages"] = filtered
+        kept.append(entry)
+    cfg["recognizers"] = kept
+    return cfg
+
+
 @functools.lru_cache(maxsize=None)
 def _build_analyzer(
     mode: AnalyzerMode,
@@ -151,12 +197,12 @@ def _build_analyzer(
     Loads the language's spaCy model into a Presidio ``NlpEngine`` and wires
     recognizers according to ``mode``:
 
-    * :attr:`AnalyzerMode.SIMPLE` — default Presidio recognizers only.
-    * :attr:`AnalyzerMode.HYBRID` — default recognizers plus a
-      :class:`BasicLangExtractRecognizer` (previous ``use_llm=True`` path).
-    * :attr:`AnalyzerMode.LLM` — an empty registry with only
-      :class:`BasicLangExtractRecognizer`; the default recognizers are
-      skipped.
+    * :attr:`AnalyzerMode.SIMPLE` — the curated recognizer set defined in
+      :data:`_RECOGNIZERS_YAML`, scoped to ``language``.
+    * :attr:`AnalyzerMode.HYBRID` — the same curated set plus a
+      :class:`BasicLangExtractRecognizer`.
+    * :attr:`AnalyzerMode.LLM` — only :class:`BasicLangExtractRecognizer`;
+      no default recognizers are registered.
 
     ``model_id`` is ignored when ``mode`` is :attr:`AnalyzerMode.SIMPLE`.
     Missing spaCy models surface as :class:`RuntimeError` naming the exact
@@ -192,7 +238,11 @@ def _build_analyzer(
             )
         )
     else:
-        registry = None
+        provider = RecognizerRegistryProvider(
+            registry_configuration=_registry_config_for(language),
+            nlp_engine=nlp_engine,
+        )
+        registry = provider.create_recognizer_registry()
 
     analyzer = AnalyzerEngine(
         nlp_engine=nlp_engine,
