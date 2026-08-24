@@ -7,6 +7,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
+from src.domain.analyzer_mode import AnalyzerMode
 from src.domain.job_status import JobStatus
 
 
@@ -28,7 +29,7 @@ class JobResponse(BaseModel):
         description="Populated only when status == 'completed'.",
     )
     language: str = "en"
-    use_llm: bool = True
+    mode: AnalyzerMode = AnalyzerMode.HYBRID
     model_id: Optional[str] = Field(
         default=None,
         description="Ollama model id used for the LLM pass, if any.",

@@ -97,12 +97,37 @@
                 <option value="pt">Portuguese (pt)</option>
               </select>
             </label>
-            <label class="flex items-start gap-3 mt-1">
-              <input id="use-llm" type="checkbox" checked class="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
-              <span class="text-sm">
-                <span class="font-medium text-slate-700">Use the LLM pass</span>
-                <span class="block text-xs text-slate-500">Slower, but catches more sensitive data. Uncheck for a quick pass.</span>
-              </span>
+            <label class="block">
+              <span class="text-sm font-medium text-slate-700">Redaction mode</span>
+              <div
+                id="mode-group"
+                role="radiogroup"
+                aria-label="Redaction mode"
+                class="mt-1 inline-flex w-full rounded-md border border-slate-300 bg-slate-100 p-0.5"
+              >
+                <button
+                  type="button"
+                  role="radio"
+                  data-mode="simple"
+                  aria-checked="false"
+                  class="mode-btn flex-1 px-3 py-1.5 text-sm font-medium rounded text-slate-600 hover:text-slate-900"
+                >Simple</button>
+                <button
+                  type="button"
+                  role="radio"
+                  data-mode="hybrid"
+                  aria-checked="true"
+                  class="mode-btn flex-1 px-3 py-1.5 text-sm font-medium rounded bg-white shadow-sm text-slate-900"
+                >Hybrid</button>
+                <button
+                  type="button"
+                  role="radio"
+                  data-mode="llm"
+                  aria-checked="false"
+                  class="mode-btn flex-1 px-3 py-1.5 text-sm font-medium rounded text-slate-600 hover:text-slate-900"
+                >LLM</button>
+              </div>
+              <p id="mode-hint" class="text-xs text-slate-500 mt-1">Hybrid: base Presidio recognizers plus the LangExtract LLM pass.</p>
             </label>
           </div>
 
@@ -116,7 +141,7 @@
               <option>Loading models…</option>
             </select>
             <p id="model-error" class="hidden text-xs text-red-700 mt-1"></p>
-            <p id="model-hint" class="text-xs text-slate-500 mt-1">Only used when the LLM pass is enabled. Smaller models are faster; larger ones catch more.</p>
+            <p id="model-hint" class="text-xs text-slate-500 mt-1">Only used in Hybrid or LLM mode. Smaller models are faster; larger ones catch more.</p>
           </label>
 
           <!-- Errors -->
@@ -165,6 +190,7 @@
                 <th class="text-left font-medium px-4 py-2">Status</th>
                 <th class="text-right font-medium px-4 py-2">Files</th>
                 <th class="text-left font-medium px-4 py-2">Language</th>
+                <th class="text-left font-medium px-4 py-2">Mode</th>
                 <th class="text-left font-medium px-4 py-2">Model</th>
                 <th class="text-left font-medium px-4 py-2">Created</th>
                 <th class="text-left font-medium px-4 py-2">Duration</th>
@@ -173,7 +199,7 @@
             </thead>
             <tbody id="jobs-tbody" class="divide-y divide-slate-100">
               <tr>
-                <td colspan="9" class="px-4 py-8 text-center text-sm text-slate-500">No jobs yet. Upload some PDFs above.</td>
+                <td colspan="10" class="px-4 py-8 text-center text-sm text-slate-500">No jobs yet. Upload some PDFs above.</td>
               </tr>
             </tbody>
           </table>
@@ -208,12 +234,12 @@
           }
           return r.json();
         },
-        async createJob({ files, language, useLlm, modelId, name }) {
+        async createJob({ files, language, mode, modelId, name }) {
           const fd = new FormData();
           for (const f of files) fd.append("files", f, f.name);
           fd.append("language", language);
-          fd.append("use_llm", useLlm ? "true" : "false");
-          if (modelId) fd.append("model_id", modelId);
+          fd.append("mode", mode);
+          if (mode !== "simple" && modelId) fd.append("model_id", modelId);
           if (name) fd.append("name", name);
           const r = await fetch("/jobs", { method: "POST", body: fd });
           if (!r.ok) {
@@ -254,6 +280,7 @@
         jobs: [],
         submitting: false,
         modelsLoaded: false,
+        mode: "hybrid",
       };
 
       // ---------- DOM helpers ----------
@@ -427,7 +454,7 @@
           await api.createJob({
             files: state.selectedFiles,
             language: $("language").value,
-            useLlm: $("use-llm").checked,
+            mode: state.mode,
             modelId: $("model").value,
             name: $("job-name").value.trim(),
           });
@@ -461,7 +488,7 @@
         if (jobs.length === 0) {
           tbody.innerHTML = `
             <tr>
-              <td colspan="9" class="px-4 py-8 text-center text-sm text-slate-500">No jobs yet. Upload some PDFs above.</td>
+              <td colspan="10" class="px-4 py-8 text-center text-sm text-slate-500">No jobs yet. Upload some PDFs above.</td>
             </tr>`;
           return;
         }
@@ -477,7 +504,8 @@
         const statusLabel = STATUS_LABELS[job.status] || job.status;
         const canDownload = job.status === "completed" && job.result_url;
         const errorAttr = job.error ? ` title="${escapeHtml(job.error)}"` : "";
-        const modelCell = job.use_llm && job.model_id ? job.model_id : "—";
+        const jobMode = job.mode || "hybrid";
+        const modelCell = jobMode !== "simple" && job.model_id ? job.model_id : "—";
         const languageCell = job.language || "—";
         const nameCell = job.name ? escapeHtml(job.name) : `<span class="text-slate-400">—</span>`;
         return `
@@ -490,6 +518,7 @@
             </td>
             <td class="px-4 py-3 text-right tabular-nums">${job.file_count ?? "—"}</td>
             <td class="px-4 py-3 text-slate-600 uppercase">${escapeHtml(languageCell)}</td>
+            <td class="px-4 py-3 text-slate-600 uppercase">${escapeHtml(jobMode)}</td>
             <td class="px-4 py-3 font-mono text-xs text-slate-600">${escapeHtml(modelCell)}</td>
             <td class="px-4 py-3 text-slate-600">${escapeHtml(fmtDateTime(job.created_at))}</td>
             <td class="px-4 py-3 text-slate-600 tabular-nums">${escapeHtml(fmtDuration(job))}</td>
@@ -638,12 +667,48 @@
           modelSelect.value = hasPreferred ? preferred : models[0].id;
           modelSelect.disabled = false;
           state.modelsLoaded = true;
+          applyModeToModelSelect();
           submitBtn.disabled = state.selectedFiles.length === 0;
         } catch (err) {
           showModelError(err.message || "Could not load models.");
           modelSelect.innerHTML = `<option>Unavailable</option>`;
           submitBtn.disabled = true;
         }
+      }
+
+      // ---------- Mode segmented control ----------
+      const MODE_HINTS = {
+        simple: "Simple: default Presidio recognizers only. No LLM required.",
+        hybrid: "Hybrid: base Presidio recognizers plus the LangExtract LLM pass.",
+        llm: "LLM: only the LangExtract recognizer. Requires Ollama.",
+      };
+      const modeButtons = Array.from(document.querySelectorAll(".mode-btn"));
+      const modeHint = $("mode-hint");
+
+      function applyModeToModelSelect() {
+        const simple = state.mode === "simple";
+        // Model dropdown is disabled while models are still loading or in simple mode.
+        modelSelect.disabled = simple || !state.modelsLoaded;
+      }
+
+      function setMode(mode) {
+        if (!["simple", "hybrid", "llm"].includes(mode)) return;
+        state.mode = mode;
+        for (const btn of modeButtons) {
+          const selected = btn.dataset.mode === mode;
+          btn.setAttribute("aria-checked", selected ? "true" : "false");
+          btn.className =
+            "mode-btn flex-1 px-3 py-1.5 text-sm font-medium rounded " +
+            (selected
+              ? "bg-white shadow-sm text-slate-900"
+              : "text-slate-600 hover:text-slate-900");
+        }
+        modeHint.textContent = MODE_HINTS[mode];
+        applyModeToModelSelect();
+      }
+
+      for (const btn of modeButtons) {
+        btn.addEventListener("click", () => setMode(btn.dataset.mode));
       }
 
       // ---------- Boot ----------

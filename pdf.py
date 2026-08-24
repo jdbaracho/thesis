@@ -19,7 +19,7 @@ if __name__ == "__main__":
     output_xlsx = os.path.splitext(output_pdf)[0] + ".xlsx"
 
     doc = fitz.open(input_pdf)
-    redactor = PDFRedactor(use_llm=False)
+    redactor = PDFRedactor(mode="simple")
     doc, translation_table = redactor.redact(doc)
 
     os.makedirs(os.path.dirname(output_pdf), exist_ok=True)

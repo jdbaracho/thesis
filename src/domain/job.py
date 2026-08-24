@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from src.domain.analyzer_mode import AnalyzerMode
 from src.domain.job_response import JobResponse
 from src.domain.job_status import JobStatus
 
@@ -44,12 +45,12 @@ class Job:
         :attr:`JobStatus.COMPLETED`.
     language:
         ISO code (``"en"`` / ``"es"`` / ``"pt"``) the job ran with.
-    use_llm:
-        Whether the LangExtract LLM pass was enabled for this job.
+    mode:
+        Which recognizers participated (:class:`AnalyzerMode`).
     model_id:
-        Ollama model id used for the LLM pass. ``None`` when ``use_llm``
-        is false; otherwise a concrete id (the caller's override, or the
-        language's YAML default).
+        Ollama model id used for the LLM pass. ``None`` when ``mode`` is
+        :attr:`AnalyzerMode.SIMPLE`; otherwise a concrete id (the caller's
+        override, or the language's YAML default).
     name:
         Optional human-readable label supplied by the client to make the
         job easier to identify in the UI. Never used by the pipeline.
@@ -65,7 +66,7 @@ class Job:
     error: Optional[str] = None
     result_path: Optional[Path] = None
     language: str = "en"
-    use_llm: bool = True
+    mode: AnalyzerMode = AnalyzerMode.HYBRID
     model_id: Optional[str] = None
     name: Optional[str] = None
 
@@ -85,7 +86,7 @@ class Job:
                 else None
             ),
             language=self.language,
-            use_llm=self.use_llm,
+            mode=self.mode,
             model_id=self.model_id,
             name=self.name,
         )

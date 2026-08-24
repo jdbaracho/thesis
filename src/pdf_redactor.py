@@ -16,19 +16,20 @@ import os
 import re
 import tempfile
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple, TypedDict
+from typing import Dict, List, Optional, Set, Tuple, TypedDict, Union
 
 import fitz  # PyMuPDF
 import yaml
 from PIL import Image, ImageDraw, ImageFont
 
-from presidio_analyzer import AnalyzerEngine, RecognizerResult
+from presidio_analyzer import AnalyzerEngine, RecognizerRegistry, RecognizerResult
 from presidio_analyzer.nlp_engine import NlpEngineProvider
 from presidio_analyzer.predefined_recognizers.third_party.basic_langextract_recognizer import (
     BasicLangExtractRecognizer,
 )
 from presidio_image_redactor.entities import ImageRecognizerResult
 
+from src.domain.analyzer_mode import AnalyzerMode
 from src.presidio_extensions.custom_image_analyzer import CustomImageAnalyzerEngine
 from src.presidio_extensions.presidio_utils import resolve_conflicts
 
@@ -141,17 +142,23 @@ DEFAULT_CONFIG_PATH: str = LANGUAGE_CONFIG["en"]["config_path"]
 
 @functools.lru_cache(maxsize=None)
 def _build_analyzer(
-    use_llm: bool,
+    mode: AnalyzerMode,
     language: str,
     model_id: Optional[str],
 ) -> AnalyzerEngine:
-    """Return a cached :class:`AnalyzerEngine` for one ``(use_llm, language, model_id)``.
+    """Return a cached :class:`AnalyzerEngine` for one ``(mode, language, model_id)``.
 
-    Loads the language's spaCy model into a Presidio ``NlpEngine`` and,
-    when ``use_llm`` is true, registers a :class:`BasicLangExtractRecognizer`
-    whose YAML config carries the requested ``model_id`` override (or the
-    default from :data:`LANGUAGE_CONFIG` when ``model_id`` is ``None``).
+    Loads the language's spaCy model into a Presidio ``NlpEngine`` and wires
+    recognizers according to ``mode``:
 
+    * :attr:`AnalyzerMode.SIMPLE` — default Presidio recognizers only.
+    * :attr:`AnalyzerMode.HYBRID` — default recognizers plus a
+      :class:`BasicLangExtractRecognizer` (previous ``use_llm=True`` path).
+    * :attr:`AnalyzerMode.LLM` — an empty registry with only
+      :class:`BasicLangExtractRecognizer`; the default recognizers are
+      skipped.
+
+    ``model_id`` is ignored when ``mode`` is :attr:`AnalyzerMode.SIMPLE`.
     Missing spaCy models surface as :class:`RuntimeError` naming the exact
     ``python -m spacy download`` command required.
     """
@@ -161,8 +168,8 @@ def _build_analyzer(
         "models": [{"lang_code": language, "model_name": spacy_model}],
     }
     logger.info(
-        "Building AnalyzerEngine (language=%s, use_llm=%s, model_id=%s)",
-        language, use_llm, model_id,
+        "Building AnalyzerEngine (language=%s, mode=%s, model_id=%s)",
+        language, mode.value, model_id,
     )
     try:
         nlp_engine = NlpEngineProvider(
@@ -174,12 +181,26 @@ def _build_analyzer(
             f"Run: python -m spacy download {spacy_model}"
         ) from exc
 
+    if mode is AnalyzerMode.LLM:
+        # Pre-populated so Presidio's AnalyzerEngine does NOT auto-load the
+        # default recognizers (it does that whenever registry.recognizers is empty).
+        registry = RecognizerRegistry(supported_languages=[language])
+        registry.add_recognizer(
+            BasicLangExtractRecognizer(
+                config_path=_get_config_path_for(language, model_id),
+                supported_language=language,
+            )
+        )
+    else:
+        registry = None
+
     analyzer = AnalyzerEngine(
         nlp_engine=nlp_engine,
+        registry=registry,
         supported_languages=[language],
         default_score_threshold=0.8,
     )
-    if use_llm:
+    if mode is AnalyzerMode.HYBRID:
         analyzer.registry.add_recognizer(
             BasicLangExtractRecognizer(
                 config_path=_get_config_path_for(language, model_id),
@@ -245,14 +266,15 @@ class PDFRedactor:
     analyzer:
         Pre-configured Presidio `AnalyzerEngine`. When ``None`` (default) a
         multi-lingual engine built by :func:`_build_analyzer` is used
-        (shared across all instances with the same ``use_llm``).
+        (shared across all instances with the same ``mode``).
     image_analyzer:
         Pre-configured `CustomImageAnalyzerEngine`. When ``None`` (default)
         one is built on top of ``self.analyzer``.
-    use_llm:
-        When ``True`` (default), each supported language gets a
-        `BasicLangExtractRecognizer` registered on the default analyzer.
-        Ignored when ``analyzer`` is provided.
+    mode:
+        Which recognizers to register (:class:`AnalyzerMode`); accepts the
+        enum or its string value (``"simple"`` / ``"hybrid"`` / ``"llm"``).
+        Defaults to :attr:`AnalyzerMode.HYBRID`. Ignored when ``analyzer``
+        is provided.
     language:
         Language code passed to the analyzer for text detection and to
         Tesseract for OCR. Must be a key of :data:`LANGUAGE_CONFIG`
@@ -261,14 +283,15 @@ class PDFRedactor:
         Ollama model id (e.g. ``"gemma3:12b"``) that overrides
         ``langextract.model.model_id`` in the language YAML. When ``None``
         (default) the value from the checked-in YAML is used unchanged.
-        Ignored when ``analyzer`` is provided or ``use_llm`` is false.
+        Ignored when ``analyzer`` is provided or ``mode`` is
+        :attr:`AnalyzerMode.SIMPLE`.
     """
 
     def __init__(
         self,
         analyzer: Optional[AnalyzerEngine] = None,
         image_analyzer: Optional[CustomImageAnalyzerEngine] = None,
-        use_llm: bool = True,
+        mode: Union[AnalyzerMode, str] = AnalyzerMode.HYBRID,
         language: str = "en",
         model_id: Optional[str] = None,
     ) -> None:
@@ -278,8 +301,12 @@ class PDFRedactor:
                 f"Supported: {sorted(LANGUAGE_CONFIG)}"
             )
 
+        mode = AnalyzerMode(mode)
+        if mode is AnalyzerMode.SIMPLE:
+            model_id = None
+
         if analyzer is None:
-            analyzer = _build_analyzer(use_llm, language, model_id)
+            analyzer = _build_analyzer(mode, language, model_id)
         self.analyzer = analyzer
 
         if image_analyzer is None:
@@ -287,6 +314,7 @@ class PDFRedactor:
         self.image_analyzer = image_analyzer
 
         self.language = language
+        self.mode = mode
         self.model_id = model_id
         self.tesseract_lang = LANGUAGE_CONFIG[language]["tesseract_lang"]
 

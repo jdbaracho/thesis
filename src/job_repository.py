@@ -69,7 +69,7 @@ class JobRepository:
         """Register a new pending job and prepare its workdir.
 
         Extra ``**fields`` are forwarded to the :class:`Job` constructor so
-        callers can seed per-job settings (``language``, ``use_llm``,
+        callers can seed per-job settings (``language``, ``mode``,
         ``model_id``) at creation time.
         """
         job_id = uuid.uuid4().hex

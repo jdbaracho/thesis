@@ -51,6 +51,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from src import job_service
+from src.domain.analyzer_mode import AnalyzerMode
 from src.domain.job_response import JobResponse
 from src.domain.job_status import JobStatus
 from src.job_repository import JOB_ROOT
@@ -138,15 +139,18 @@ async def create_job(
         str,
         Form(description="Language code passed to Presidio (default 'en')."),
     ] = "en",
-    use_llm: Annotated[
-        bool,
+    mode: Annotated[
+        str,
         Form(
             description=(
-                "Enable the BasicLangExtractRecognizer. Set to false to skip "
-                "the LLM-backed pass (much faster, weaker recall)."
+                "Which recognizers to use: 'simple' (default Presidio "
+                "recognizers only), 'hybrid' (default + "
+                "BasicLangExtractRecognizer, default) or 'llm' (only "
+                "BasicLangExtractRecognizer)."
             ),
+            pattern="^(simple|hybrid|llm)$",
         ),
-    ] = True,
+    ] = "hybrid",
     model_id: Annotated[
         Optional[str],
         Form(
@@ -194,7 +198,7 @@ async def create_job(
     job = await job_service.create_job(
         files=files,
         language=language,
-        use_llm=use_llm,
+        mode=AnalyzerMode(mode),
         model_id=model_id,
         name=name,
     )

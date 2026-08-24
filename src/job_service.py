@@ -31,6 +31,7 @@ from typing import Dict, List, Optional
 
 from fastapi import UploadFile
 
+from src.domain.analyzer_mode import AnalyzerMode
 from src.domain.job import Job
 from src.domain.job_status import JobStatus
 from src.job_repository import job_repository
@@ -81,12 +82,13 @@ def shutdown_executor() -> None:
 
 
 @functools.lru_cache(maxsize=None)
-def get_redactor(language: str, use_llm: bool, model_id: Optional[str]):  # noqa: ANN201 - forward ref
-    """Return a cached :class:`PDFRedactor` for ``(language, use_llm, model_id)``.
+def get_redactor(language: str, mode: AnalyzerMode, model_id: Optional[str]):  # noqa: ANN201 - forward ref
+    """Return a cached :class:`PDFRedactor` for ``(language, mode, model_id)``.
 
-    Building the redactor loads the Presidio analyzer and, when ``use_llm`` is
-    true, the LangExtract recognizer — both expensive. The cache keeps one
-    instance per unique key for the process lifetime.
+    Building the redactor loads the Presidio analyzer and, when ``mode`` is
+    not :attr:`AnalyzerMode.SIMPLE`, the LangExtract recognizer — both
+    expensive. The cache keeps one instance per unique key for the process
+    lifetime.
 
     Imports are lazy so that importing this module (e.g. for tests) does not
     require the heavy Presidio / PyMuPDF stack.
@@ -100,10 +102,10 @@ def get_redactor(language: str, use_llm: bool, model_id: Optional[str]):  # noqa
         )
 
     logger.info(
-        "Building PDFRedactor (language=%s, use_llm=%s, model_id=%s)",
-        language, use_llm, model_id,
+        "Building PDFRedactor (language=%s, mode=%s, model_id=%s)",
+        language, mode.value, model_id,
     )
-    return PDFRedactor(use_llm=use_llm, language=language, model_id=model_id)
+    return PDFRedactor(mode=mode, language=language, model_id=model_id)
 
 
 def get_job(job_id: str) -> Optional[Job]:
@@ -119,7 +121,7 @@ def list_jobs() -> List[Job]:
 async def create_job(
     files: List[UploadFile],
     language: str,
-    use_llm: bool,
+    mode: AnalyzerMode,
     model_id: Optional[str] = None,
     name: Optional[str] = None,
 ) -> Job:
@@ -127,11 +129,14 @@ async def create_job(
     # Resolve to a concrete id so the persisted Job always records what ran.
     from src.pdf_redactor import LANGUAGE_CONFIG  # local: heavy deps
 
-    resolved_model_id = model_id or LANGUAGE_CONFIG[language]["default_model_id"]
+    if mode is AnalyzerMode.SIMPLE:
+        resolved_model_id: Optional[str] = None
+    else:
+        resolved_model_id = model_id or LANGUAGE_CONFIG[language]["default_model_id"]
     job = job_repository.create(
         file_count=len(files),
         language=language,
-        use_llm=use_llm,
+        mode=mode,
         model_id=resolved_model_id,
         name=name,
     )
@@ -159,7 +164,7 @@ async def create_job(
         job.id,
         input_paths,
         language=language,
-        use_llm=use_llm,
+        mode=mode,
         model_id=resolved_model_id,
     )
     return job
@@ -179,7 +184,7 @@ def _redact_one(
     input_path: Path,
     output_dir: Path,
     language: str,
-    use_llm: bool,
+    mode: AnalyzerMode,
     model_id: Optional[str],
     output_stem: Optional[str] = None,
 ) -> List[Path]:
@@ -200,7 +205,7 @@ def _redact_one(
 
     try:
         redactor = get_redactor(
-            language=language, use_llm=use_llm, model_id=model_id
+            language=language, mode=mode, model_id=model_id
         )
         doc = fitz.open(input_path)
         try:
@@ -225,7 +230,7 @@ def _process_job(
     job_id: str,
     input_paths: List[Path],
     language: str,
-    use_llm: bool,
+    mode: AnalyzerMode,
     model_id: Optional[str],
 ) -> None:
     """Worker entry point: redact every input PDF and produce ``result.zip``.
@@ -259,7 +264,7 @@ def _process_job(
                     input_path,
                     redacted_dir,
                     language,
-                    use_llm,
+                    mode,
                     model_id,
                     output_stem=stem,
                 )
@@ -289,10 +294,10 @@ def _submit_job(
     job_id: str,
     input_paths: List[Path],
     language: str,
-    use_llm: bool,
+    mode: AnalyzerMode,
     model_id: Optional[str],
 ) -> concurrent.futures.Future:
     """Enqueue ``process_job`` on the module-level executor."""
     return _executor.submit(
-        _process_job, job_id, input_paths, language, use_llm, model_id
+        _process_job, job_id, input_paths, language, mode, model_id
     )
