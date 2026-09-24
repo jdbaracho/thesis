@@ -185,6 +185,7 @@ Defaults: `http://127.0.0.1:8000`. Configuration via environment variables:
 | ------------------------------ | ----------- | --------------------------------------------------------- |
 | `HOST`                         | `127.0.0.1` | Bind address                                              |
 | `PORT`                         | `8000`      | Bind port                                                 |
+| `PDF_REDACTOR_DATA_DIR`        | `src/output` | Root for persistent job data (`api_jobs/` lives here). Point it outside the checkout (e.g. `/var/lib/pdf-redactor`) so redeploys don't wipe results. |
 | `PDF_REDACTOR_API_WORKERS`     | `1`         | Concurrent redaction workers (LLM contention if you raise it) |
 | `PDF_REDACTOR_API_LOG_LEVEL`   | `INFO`      | Logging level                                             |
 | `PDF_REDACTOR_WARNINGS`        | *(unset)*   | Set to any non-empty value to surface every Python warning (deprecations, resource leaks, third-party notices) via the logger. Use when upgrading dependencies. Overrides the narrow suppressions in [`src/warning_filters.py`](src/warning_filters.py). |
@@ -397,7 +398,7 @@ with open(f"{job_id}.zip", "wb") as out:
 | 400  | Empty file list                                                   |
 | 404  | Unknown `job_id`                                                  |
 | 409  | Result requested but job not `completed`                          |
-| 410  | Result file missing on disk (e.g. server restart cleared workdir) |
+| 410  | Result file missing on disk (job workdir deleted out-of-band)     |
 | 415  | Upload isn't a PDF                                                |
 | 422  | Malformed multipart body                                          |
 | 500  | Failed job — response body includes `detail` with the error       |

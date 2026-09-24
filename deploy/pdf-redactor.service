@@ -22,6 +22,12 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=read-only
+# Persistent job data lives outside the code checkout so redeploys/updates
+# never wipe it. systemd creates and owns /var/lib/pdf-redactor (0750,
+# User/Group below) and exposes it as $STATE_DIRECTORY.
+StateDirectory=pdf-redactor
+StateDirectoryMode=0750
+Environment=PDF_REDACTOR_DATA_DIR=/var/lib/pdf-redactor
 ReadWritePaths=/home/link/thesis/output /home/link/thesis/input /home/link/thesis/src/output /home/link/.cache
 
 [Install]

@@ -13,3 +13,7 @@ tesseract_bin/
 
 # macOS
 .ds_store
+
+.local/
+.github/
+.vscode/

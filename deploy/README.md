@@ -13,6 +13,33 @@ Artifacts:
   forces `Restart=always` on `ollama.service`. Only install if Ollama's
   current unit doesn't already have it.
 
+## Persistent job data
+
+Job metadata and artefacts (per-job workdir, `result.zip`, and a `job.json`
+sidecar) are written to disk and reloaded on startup, so **restarts, crashes,
+reboots, and redeploys no longer lose completed jobs**.
+
+The data root is controlled by `PDF_REDACTOR_DATA_DIR`. The unit sets it via
+`StateDirectory=pdf-redactor`, which makes systemd create and own
+`/var/lib/pdf-redactor` (mode `0750`, `User=link`). Because this lives
+**outside** the code checkout at `/home/link/thesis`, a `git pull` or a clean
+redeploy (`git clean -fdx`, fresh clone) can no longer wipe it.
+
+Jobs that were still `pending`/`running` when the process stopped are reloaded
+as `failed` (interrupted) — resubmit those. Inspect stored jobs with:
+
+```bash
+sudo ls -1 /var/lib/pdf-redactor/api_jobs        # one dir per job id
+sudo cat /var/lib/pdf-redactor/api_jobs/*/job.json
+```
+
+Data is only removed by the API's `DELETE /jobs` endpoints. To purge manually:
+
+```bash
+sudo rm -rf /var/lib/pdf-redactor/api_jobs/*
+sudo systemctl restart pdf-redactor
+```
+
 ## Install
 
 Run from the repo root on the VM.
@@ -70,6 +97,15 @@ sudo systemctl kill -s KILL ollama            # Ollama should be back in ~5s
 sudo reboot                                   # both units auto-start
 ```
 
+Persistence check — a completed job must survive a restart:
+
+```bash
+curl -sS http://127.0.0.1:8000/jobs | python3 -c 'import sys,json;print(len(json.load(sys.stdin)),"jobs")'
+sudo systemctl restart pdf-redactor
+curl -sS http://127.0.0.1:8000/jobs | python3 -c 'import sys,json;print(len(json.load(sys.stdin)),"jobs")'
+# the two counts should match; completed jobs stay downloadable
+```
+
 ## Change env vars
 
 ```bash
@@ -78,6 +114,22 @@ sudo systemctl restart pdf-redactor
 ```
 
 No `daemon-reload` needed for env-file changes.
+
+## Applying an update
+
+Pull the latest code and reinstall the deploy artifacts. Safe to run every
+time; persistent job data under `/var/lib/pdf-redactor` is never touched.
+
+```bash
+cd /home/link/thesis && git pull
+sudo install -m 644 deploy/pdf-redactor.service /etc/systemd/system/pdf-redactor.service
+sudo install -m 644 deploy/pdf-redactor.env     /etc/default/pdf-redactor
+sudo systemctl daemon-reload
+sudo systemctl restart pdf-redactor
+```
+
+Then re-run the [Verify](#verify) checks. If only the unit file changed, the
+step below is enough; the full block above is the safe default.
 
 ## Update the unit file
 

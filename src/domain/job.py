@@ -90,3 +90,50 @@ class Job:
             model_id=self.model_id,
             name=self.name,
         )
+
+    def to_dict(self) -> dict:
+        """Serialise this job to a JSON-friendly dict for on-disk persistence."""
+        return {
+            "id": self.id,
+            "workdir": str(self.workdir),
+            "status": self.status.value,
+            "file_count": self.file_count,
+            "created_at": self.created_at.isoformat(),
+            "started_at": self.started_at.isoformat() if self.started_at else None,
+            "finished_at": self.finished_at.isoformat() if self.finished_at else None,
+            "error": self.error,
+            "result_path": str(self.result_path) if self.result_path else None,
+            "language": self.language,
+            "mode": self.mode.value,
+            "model_id": self.model_id,
+            "name": self.name,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Job":
+        """Reconstruct a :class:`Job` from a dict produced by :meth:`to_dict`."""
+        return cls(
+            id=data["id"],
+            workdir=Path(data["workdir"]),
+            status=JobStatus(data["status"]),
+            file_count=data.get("file_count", 0),
+            created_at=datetime.fromisoformat(data["created_at"]),
+            started_at=(
+                datetime.fromisoformat(data["started_at"])
+                if data.get("started_at")
+                else None
+            ),
+            finished_at=(
+                datetime.fromisoformat(data["finished_at"])
+                if data.get("finished_at")
+                else None
+            ),
+            error=data.get("error"),
+            result_path=(
+                Path(data["result_path"]) if data.get("result_path") else None
+            ),
+            language=data.get("language", "en"),
+            mode=AnalyzerMode(data.get("mode", "hybrid")),
+            model_id=data.get("model_id"),
+            name=data.get("name"),
+        )
