@@ -9,10 +9,10 @@ lm_recognizer:
     - PHONE_NUMBER
     - EMAIL_ADDRESS
     - DATE_TIME
-    - US_SSN
+    # - US_SSN  # Temporarily disabled.
     - CREDIT_CARD
-    - MEDICAL_LICENSE
-    - IP_ADDRESS
+    # - MEDICAL_LICENSE  # Temporarily disabled.
+    # - IP_ADDRESS  # Temporarily disabled.
     # - URL
     - IBAN_CODE
   

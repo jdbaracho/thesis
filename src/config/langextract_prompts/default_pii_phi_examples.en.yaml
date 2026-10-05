@@ -29,10 +29,11 @@ examples:
   # 3) SSN + Date of Birth
   - text: "SSN: 123-45-6789; Date of Birth: 01/15/1980."
     extractions:
-      - extraction_class: "US_SSN"
-        extraction_text: "123-45-6789"
-        attributes:
-          type: "us_ssn"
+      # US_SSN temporarily disabled.
+      # - extraction_class: "US_SSN"
+      #   extraction_text: "123-45-6789"
+      #   attributes:
+      #     type: "us_ssn"
       - extraction_class: "DATE_TIME"
         extraction_text: "01/15/1980"
         attributes:
@@ -77,25 +78,25 @@ examples:
           type: "phone_number"
           region: "US"
 
-  # 7) URL + IP addresses
-  - text: "Visit https://example.com/login or example.org. Server IPs: 192.168.1.100 and fe80::1ff:fe23:4567:890a."
-    extractions:
-      - extraction_class: "URL"
-        extraction_text: "https://example.com/login"
-        attributes:
-          type: "website_url"
-      - extraction_class: "URL"
-        extraction_text: "example.org"
-        attributes:
-          type: "domain"
-      - extraction_class: "IP_ADDRESS"
-        extraction_text: "192.168.1.100"
-        attributes:
-          type: "ipv4"
-      - extraction_class: "IP_ADDRESS"
-        extraction_text: "fe80::1ff:fe23:4567:890a"
-        attributes:
-          type: "ipv6"
+  # 7) URL + IP addresses - temporarily disabled (URL, IP_ADDRESS off).
+  # - text: "Visit https://example.com/login or example.org. Server IPs: 192.168.1.100 and fe80::1ff:fe23:4567:890a."
+  #   extractions:
+  #     - extraction_class: "URL"
+  #       extraction_text: "https://example.com/login"
+  #       attributes:
+  #         type: "website_url"
+  #     - extraction_class: "URL"
+  #       extraction_text: "example.org"
+  #       attributes:
+  #         type: "domain"
+  #     - extraction_class: "IP_ADDRESS"
+  #       extraction_text: "192.168.1.100"
+  #       attributes:
+  #         type: "ipv4"
+  #     - extraction_class: "IP_ADDRESS"
+  #       extraction_text: "fe80::1ff:fe23:4567:890a"
+  #       attributes:
+  #         type: "ipv6"
 
   # 8) Email without TLD + Phone
   - text: "Reach me at alex.roe@mailserver or at the office line 555.987.6543."

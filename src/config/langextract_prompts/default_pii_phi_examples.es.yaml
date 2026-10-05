@@ -74,17 +74,17 @@ examples:
           type: "phone_number"
           region: "GB"
 
-  # 7) Direcciones IP
-  - text: "Servidores de la empresa: 192.168.1.100 y fe80::1ff:fe23:4567:890a."
-    extractions:
-      - extraction_class: "IP_ADDRESS"
-        extraction_text: "192.168.1.100"
-        attributes:
-          type: "ipv4"
-      - extraction_class: "IP_ADDRESS"
-        extraction_text: "fe80::1ff:fe23:4567:890a"
-        attributes:
-          type: "ipv6"
+  # 7) Direcciones IP - temporalmente desactivado (IP_ADDRESS off).
+  # - text: "Servidores de la empresa: 192.168.1.100 y fe80::1ff:fe23:4567:890a."
+  #   extractions:
+  #     - extraction_class: "IP_ADDRESS"
+  #       extraction_text: "192.168.1.100"
+  #       attributes:
+  #         type: "ipv4"
+  #     - extraction_class: "IP_ADDRESS"
+  #       extraction_text: "fe80::1ff:fe23:4567:890a"
+  #       attributes:
+  #         type: "ipv6"
 
   # 8) IBAN + correo de soporte
   - text: "Realice la transferencia al IBAN ES91 2100 0418 4502 0005 1332. Contacto: soporte@banco.es."
@@ -130,11 +130,12 @@ examples:
         extraction_text: "Dr. Luis Martín"
         attributes:
           type: "healthcare_provider"
-      - extraction_class: "MEDICAL_LICENSE"
-        extraction_text: "28/45123"
-        attributes:
-          type: "medical_license_number"
-          country: "ES"
+      # MEDICAL_LICENSE temporalmente desactivado.
+      # - extraction_class: "MEDICAL_LICENSE"
+      #   extraction_text: "28/45123"
+      #   attributes:
+      #     type: "medical_license_number"
+      #     country: "ES"
 
   # 12) Persona + localización (ciudad, comunidad autónoma)
   - text: "Laura Fernández vive en Valencia, Comunidad Valenciana."

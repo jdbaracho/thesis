@@ -74,17 +74,17 @@ examples:
           type: "phone_number"
           region: "GB"
 
-  # 7) Endereços IP
-  - text: "Servidores da empresa: 192.168.1.100 e fe80::1ff:fe23:4567:890a."
-    extractions:
-      - extraction_class: "IP_ADDRESS"
-        extraction_text: "192.168.1.100"
-        attributes:
-          type: "ipv4"
-      - extraction_class: "IP_ADDRESS"
-        extraction_text: "fe80::1ff:fe23:4567:890a"
-        attributes:
-          type: "ipv6"
+  # 7) Endereços IP - temporariamente desativado (IP_ADDRESS off).
+  # - text: "Servidores da empresa: 192.168.1.100 e fe80::1ff:fe23:4567:890a."
+  #   extractions:
+  #     - extraction_class: "IP_ADDRESS"
+  #       extraction_text: "192.168.1.100"
+  #       attributes:
+  #         type: "ipv4"
+  #     - extraction_class: "IP_ADDRESS"
+  #       extraction_text: "fe80::1ff:fe23:4567:890a"
+  #       attributes:
+  #         type: "ipv6"
 
   # 8) IBAN + email de apoio
   - text: "Efetue a transferência para o IBAN PT50 0002 0123 1234 5678 9015 4. Contacto: suporte@banco.pt."
@@ -130,11 +130,12 @@ examples:
         extraction_text: "Dr. Rui Marques"
         attributes:
           type: "healthcare_provider"
-      - extraction_class: "MEDICAL_LICENSE"
-        extraction_text: "12345"
-        attributes:
-          type: "medical_license_number"
-          country: "PT"
+      # MEDICAL_LICENSE temporariamente desativado.
+      # - extraction_class: "MEDICAL_LICENSE"
+      #   extraction_text: "12345"
+      #   attributes:
+      #     type: "medical_license_number"
+      #     country: "PT"
 
   # 12) Pessoa + localização (cidade, distrito)
   - text: "Ana Ferreira mora em Coimbra, distrito de Coimbra."

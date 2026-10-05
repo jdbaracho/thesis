@@ -41,8 +41,9 @@ recognizers:
         context: [cartão, cartao, crédito, credito, visa, mastercard, cc, amex, discover]
     type: predefined
 
-  - name: CryptoRecognizer
-    type: predefined
+  # Temporarily disabled.
+  # - name: CryptoRecognizer
+  #   type: predefined
 
   - name: DateRecognizer
     type: predefined
@@ -53,17 +54,19 @@ recognizers:
   - name: IbanRecognizer
     type: predefined
 
-  - name: IpRecognizer
-    type: predefined
+  # Temporarily disabled.
+  # - name: IpRecognizer
+  #   type: predefined
 
-  - name: MacAddressRecognizer
-    type: predefined
+  # Temporarily disabled.
+  # - name: MacAddressRecognizer
+  #   type: predefined
 
   - name: PhoneRecognizer
     type: predefined
 
-  - name: UrlRecognizer
-    type: predefined
+  # - name: UrlRecognizer
+  #   type: predefined
 
   # ---- LLM pass ----------------------------------------------------------
   # Registered programmatically by PDFRedactor for hybrid/llm modes.
