@@ -195,17 +195,19 @@ def _write_llm_reports(
 
     ``failures`` is the list of :class:`~src.pdf_redactor.LLMFailure` returned
     by the redactor. The report groups failures by page and notes whether each
-    page failed in the ``text`` layer, an ``image``, or both.
+    page failed in the ``text`` layer, an ``image``, or both, and whether the
+    failure was a ``call`` failure (the LLM call errored) or a ``parse`` failure
+    (the model replied but a chunk could not be parsed).
     """
-    # Group by page -> {"text": bool, "image_xrefs": [...]}
+    # Group by page -> {"text": set(kinds), "image": {xref: set(kinds)}}
     pages: Dict[int, Dict[str, object]] = {}
     for f in failures:
-        bucket = pages.setdefault(f.page, {"text": False, "image_xrefs": []})
+        bucket = pages.setdefault(f.page, {"text": set(), "image": {}})
         if f.source == "image":
-            if f.xref is not None:
-                bucket["image_xrefs"].append(f.xref)  # type: ignore[union-attr]
+            images: Dict[object, set] = bucket["image"]  # type: ignore[assignment]
+            images.setdefault(f.xref, set()).add(f.kind)
         else:
-            bucket["text"] = True
+            bucket["text"].add(f.kind)  # type: ignore[union-attr]
 
     header = (
         f"LangExtract LLM report \u2014 {source_name}\n"
@@ -213,28 +215,42 @@ def _write_llm_reports(
         f"language={language}\n"
     )
 
+    def _kinds(kinds: set) -> str:
+        return "/".join(sorted(kinds))
+
     lines: List[str] = [header]
     json_pages: List[Dict[str, object]] = []
     if not failures:
         lines.append("\nNo LLM failures: every LangExtract call succeeded.\n")
     else:
-        lines.append(f"\nPages with LLM failures: {len(pages)}\n")
+        call_count = sum(1 for f in failures if f.kind == "call")
+        parse_count = sum(1 for f in failures if f.kind == "parse")
+        lines.append(
+            f"\nPages with LLM failures: {len(pages)}  "
+            f"(call: {call_count}, parse: {parse_count})\n"
+        )
         for page in sorted(pages):
             bucket = pages[page]
-            has_text = bool(bucket["text"])
-            xrefs = bucket["image_xrefs"]  # type: ignore[assignment]
-            if has_text and xrefs:
-                label = f"text + image (xref {', '.join(map(str, xrefs))})"
-                sources = ["text", "image"]
-            elif has_text:
-                label = "text"
-                sources = ["text"]
-            else:
-                label = f"image (xref {', '.join(map(str, xrefs))})"
-                sources = ["image"]
-            lines.append(f"  page {page}  \u2014 {label}\n")
+            text_kinds: set = bucket["text"]  # type: ignore[assignment]
+            images: Dict[object, set] = bucket["image"]  # type: ignore[assignment]
+            parts: List[str] = []
+            sources: List[str] = []
+            if text_kinds:
+                parts.append(f"text ({_kinds(text_kinds)})")
+                sources.append("text")
+            if images:
+                xref_bits = ", ".join(
+                    f"xref {xref} ({_kinds(k)})" for xref, k in images.items()
+                )
+                parts.append(f"image [{xref_bits}]")
+                sources.append("image")
+            lines.append(f"  page {page}  \u2014 {' + '.join(parts)}\n")
             json_pages.append(
-                {"page": page, "sources": sources, "image_xrefs": list(xrefs)}
+                {
+                    "page": page,
+                    "sources": sources,
+                    "image_xrefs": list(images.keys()),
+                }
             )
         lines.append(f"\nTotal failed LLM calls: {len(failures)}\n")
 
@@ -252,6 +268,7 @@ def _write_llm_reports(
                 "page": f.page,
                 "source": f.source,
                 "xref": f.xref,
+                "kind": f.kind,
                 "error": f.error,
             }
             for f in failures

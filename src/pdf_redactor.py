@@ -47,13 +47,16 @@ class LLMFailure:
 
     ``source`` is ``"text"`` (page text layer) or ``"image"`` (OCR'd image);
     ``page`` is 1-based; ``xref`` is the PyMuPDF image xref for image failures
-    and ``None`` for text failures.
+    and ``None`` for text failures. ``kind`` is ``"call"`` when the LLM call
+    itself failed (Ollama down, timeout, ...) or ``"parse"`` when the model
+    replied but a chunk's output could not be parsed into the expected format.
     """
 
     page: int
     source: str
     xref: Optional[int]
     error: str
+    kind: str = "call"
 
 
 class _LLMFailureSink:
@@ -70,13 +73,14 @@ class _LLMFailureSink:
     ) -> None:
         self._page, self._source, self._xref = page, source, xref
 
-    def record(self, error: str) -> None:
+    def record(self, error: str, kind: str = "call") -> None:
         self.failures.append(
             LLMFailure(
                 page=self._page if self._page is not None else -1,
                 source=self._source or "unknown",
                 xref=self._xref,
                 error=error,
+                kind=kind,
             )
         )
 
@@ -88,6 +92,35 @@ _llm_failure_ctx = threading.local()
 
 def _current_failure_sink() -> Optional[_LLMFailureSink]:
     return getattr(_llm_failure_ctx, "sink", None)
+
+
+class _ChunkParseWarningHandler(logging.Handler):
+    """Records LangExtract chunk-level parse/schema failures into the sink.
+
+    ``lx.extract`` runs with ``suppress_parse_errors=True``, so when the model
+    replies with unparseable/invalid output it logs ``"Skipping chunk: parse
+    error: ..."`` (or ``"schema error"``) and drops only that chunk instead of
+    raising. Those never reach :class:`_CapturingLangExtractRecognizer`, so we
+    watch the log stream and attribute each one to the page/source currently
+    being analyzed on this thread.
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            message = record.getMessage()
+        except Exception:  # noqa: BLE001 - never let logging raise
+            return
+        if not message.startswith("Skipping chunk:"):
+            return
+        sink = _current_failure_sink()
+        if sink is not None:
+            sink.record(message, kind="parse")
+
+
+# Installed once on the root logger (resolver.py logs via the root logger). It
+# is inert unless a sink is active on the current thread.
+_chunk_parse_handler = _ChunkParseWarningHandler(level=logging.WARNING)
+logging.getLogger().addHandler(_chunk_parse_handler)
 
 
 class _CapturingLangExtractRecognizer(BasicLangExtractRecognizer):
@@ -107,7 +140,7 @@ class _CapturingLangExtractRecognizer(BasicLangExtractRecognizer):
             if sink is None:
                 raise
             logger.warning("LangExtract failed: %s", exc)
-            sink.record(str(exc) or exc.__class__.__name__)
+            sink.record(str(exc) or exc.__class__.__name__, kind="call")
             return []
 
 
