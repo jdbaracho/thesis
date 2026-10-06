@@ -5,7 +5,7 @@ lm_recognizer:
   supported_entities:
     - PERSON
     - LOCATION
-    # - ORGANIZATION
+    - ORGANIZATION
     - PHONE_NUMBER
     - EMAIL_ADDRESS
     - DATE_TIME
