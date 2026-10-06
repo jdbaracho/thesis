@@ -388,6 +388,29 @@ PendingImageRedaction = Tuple[
 ]
 
 
+#: Entities shorter than this (after whitespace normalization) are excluded
+#: from the document-wide consistency sweep to avoid over-redacting short,
+#: common tokens (e.g. initials) everywhere they appear.
+_MIN_DENY_LEN: int = 3
+
+
+@dataclass
+class _ImageContext:
+    """Cached OCR state for one image, reused by the consistency sweep.
+
+    ``entries`` accumulates ``(bbox, entity_text)`` pairs to redact; it is
+    filled during the per-page analysis and extended by the deny-list sweep.
+    """
+
+    page: fitz.Page
+    xref: int
+    pil_image: Image.Image
+    ocr_result: dict
+    text: str
+    entries: List[Tuple[ImageRecognizerResult, str]]
+
+
+
 def _load_font(size: int) -> ImageFont.ImageFont:
     """Return a truetype font at ``size`` px, falling back to PIL's default."""
     for candidate in ("Helvetica.ttc", "Arial.ttf", "DejaVuSans.ttf"):
@@ -489,7 +512,7 @@ class PDFRedactor:
         """
         translation_table: TranslationTable = {}
         pending_redactions: List[PendingTextRedaction] = []
-        pending_image_redactions: List[PendingImageRedaction] = []
+        image_ctxs: List[_ImageContext] = []
         processed_xrefs: Set[int] = set()
 
         sink = _LLMFailureSink()
@@ -504,15 +527,32 @@ class PDFRedactor:
                     page,
                     doc,
                     translation_table,
-                    pending_image_redactions,
+                    image_ctxs,
                     processed_xrefs,
                 )
         finally:
             _llm_failure_ctx.sink = None
 
         self._finalize_translation_table(translation_table)
+
+        # Document-wide consistency: redact every discovered entity everywhere
+        # it appears, even on pages/images where the recognizers (notably the
+        # non-deterministic LLM) missed it on the first pass.
+        deny_regex = self._build_deny_regex(translation_table)
+        if deny_regex is not None:
+            self._sweep_text(doc, deny_regex, translation_table, pending_redactions)
+            self._sweep_images(deny_regex, image_ctxs)
+
         self._apply_text_redactions(pending_redactions, translation_table)
+        pending_image_redactions: List[PendingImageRedaction] = [
+            (ctx.page, ctx.xref, ctx.pil_image, ctx.entries)
+            for ctx in image_ctxs
+            if ctx.entries
+        ]
         self._draw_image_redactions(pending_image_redactions, translation_table)
+        for ctx in image_ctxs:
+            if not ctx.entries:
+                ctx.pil_image.close()
 
         return doc, translation_table, sink.failures
 
@@ -548,14 +588,16 @@ class PDFRedactor:
         page: fitz.Page,
         doc: fitz.Document,
         translation_table: TranslationTable,
-        pending_image_redactions: List[PendingImageRedaction],
+        image_ctxs: List[_ImageContext],
         processed_xrefs: Set[int],
     ) -> None:
-        """OCR every image on ``page`` and queue redactions for later drawing.
+        """OCR every image on ``page``, queue redactions, and cache OCR state.
 
         Images shared across multiple pages (identified by ``xref``) are OCR'd
-        and queued only once; PyMuPDF's ``page.replace_image`` then updates
-        every page that references the same xref.
+        once; PyMuPDF's ``page.replace_image`` then updates every page that
+        references the same xref. Every successfully OCR'd image is cached in
+        ``image_ctxs`` so the later deny-list sweep can add redactions without
+        re-running OCR.
         """
         for img_info in page.get_images(full=True):
             xref = img_info[0]
@@ -582,10 +624,15 @@ class PDFRedactor:
             if sink is not None:
                 sink.set_context(page.number + 1, "image", xref)
             try:
-                bboxes, text = self.image_analyzer.analyze(
-                    pil_image,
-                    ocr_kwargs={"lang": self.tesseract_lang},
-                    language=self.language,
+                ocr_result, text = self.image_analyzer.extract_ocr(
+                    pil_image, {"lang": self.tesseract_lang}
+                )
+                analyzer_result = self.analyzer.analyze(
+                    text=text, language=self.language
+                )
+                analyzer_result = resolve_conflicts(text, analyzer_result)
+                bboxes = self.image_analyzer.map_results(
+                    analyzer_result, ocr_result, text
                 )
             except Exception as exc:  # noqa: BLE001 - OCR/Presidio pipeline is opaque; log and skip
                 logger.warning(
@@ -599,18 +646,21 @@ class PDFRedactor:
 
             self._process_results(bboxes, text, translation_table)
 
-            if not bboxes:
-                pil_image.close()
-                continue
-
-            # Capture entity_text for each box now (we have the OCR'd `text`);
-            # actual drawing/replacing happens after ids are assigned.
-            image_entries = [
+            entries = [
                 (box, _normalize_entity_text(text[box.start:box.end]))
                 for box in bboxes
             ]
-            pending_image_redactions.append(
-                (page, xref, pil_image, image_entries)
+            # Cache every OCR'd image (even with no hits yet) so the deny-list
+            # sweep can redact entities discovered elsewhere in the document.
+            image_ctxs.append(
+                _ImageContext(
+                    page=page,
+                    xref=xref,
+                    pil_image=pil_image,
+                    ocr_result=ocr_result,
+                    text=text,
+                    entries=entries,
+                )
             )
 
     def _analyze_page_text(
@@ -648,6 +698,103 @@ class PDFRedactor:
             ]
             for rect in self._chars_to_line_rects(matched_chars):
                 pending_redactions.append((page, rect, entity_text))
+
+    @staticmethod
+    def _build_deny_regex(
+        translation_table: TranslationTable,
+    ) -> Optional["re.Pattern[str]"]:
+        """Build a whitespace-flexible regex matching every known entity.
+
+        Each translation-table key becomes an alternative whose internal
+        whitespace matches any run of whitespace (so ``"John Smith"`` also
+        matches ``"John\\nSmith"`` from PDFs that split words across spans).
+        Matches are bounded by non-word characters to avoid substring hits.
+        Returns ``None`` when no entity is long enough to sweep.
+        """
+        keys = [k for k in translation_table if len(k) >= _MIN_DENY_LEN]
+        if not keys:
+            return None
+        # Longest first so the alternation prefers the most complete span.
+        keys.sort(key=len, reverse=True)
+        terms = [
+            re.sub(r"(?:\\?\s)+", r"\\s+", re.escape(k)) for k in keys
+        ]
+        pattern = r"(?:^|(?<=\W))(" + "|".join(terms) + r")(?:(?=\W)|$)"
+        return re.compile(pattern)
+
+    def _sweep_text(
+        self,
+        doc: fitz.Document,
+        deny_regex: "re.Pattern[str]",
+        translation_table: TranslationTable,
+        pending_redactions: List[PendingTextRedaction],
+    ) -> None:
+        """Redact every occurrence of a known entity across all page text."""
+        seen = {
+            (
+                page.number,
+                round(rect.x0, 1),
+                round(rect.y0, 1),
+                round(rect.x1, 1),
+                round(rect.y1, 1),
+            )
+            for page, rect, _ in pending_redactions
+        }
+        for page in doc:
+            full_text, char_records = self._extract_page_text(page)
+            if not full_text.strip():
+                continue
+            for match in deny_regex.finditer(full_text):
+                start, end = match.start(1), match.end(1)
+                entity_text = _normalize_entity_text(full_text[start:end])
+                if entity_text not in translation_table:
+                    continue
+                matched_chars = [
+                    c for c in char_records[start:end] if c is not None
+                ]
+                for rect in self._chars_to_line_rects(matched_chars):
+                    key = (
+                        page.number,
+                        round(rect.x0, 1),
+                        round(rect.y0, 1),
+                        round(rect.x1, 1),
+                        round(rect.y1, 1),
+                    )
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    pending_redactions.append((page, rect, entity_text))
+
+    def _sweep_images(
+        self,
+        deny_regex: "re.Pattern[str]",
+        image_ctxs: List[_ImageContext],
+    ) -> None:
+        """Redact known entities on every cached image's OCR text."""
+        for ctx in image_ctxs:
+            seen = {(box.start, box.end) for box, _ in ctx.entries}
+            results = [
+                RecognizerResult(
+                    entity_type="GENERIC_PII",
+                    start=match.start(1),
+                    end=match.end(1),
+                    score=1.0,
+                )
+                for match in deny_regex.finditer(ctx.text)
+                if (match.start(1), match.end(1)) not in seen
+            ]
+            if not results:
+                continue
+            bboxes = self.image_analyzer.map_results(
+                results, ctx.ocr_result, ctx.text
+            )
+            for box in bboxes:
+                key = (box.start, box.end)
+                if key in seen:
+                    continue
+                seen.add(key)
+                entity_text = _normalize_entity_text(ctx.text[box.start:box.end])
+                ctx.entries.append((box, entity_text))
 
     @staticmethod
     def _extract_page_text(

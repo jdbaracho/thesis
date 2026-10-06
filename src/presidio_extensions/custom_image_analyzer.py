@@ -19,7 +19,29 @@ class CustomImageAnalyzerEngine(ImageAnalyzerEngine):
 
         :return: List of the extract entities with image bounding boxes.
         """
-        # Perform OCR
+        ocr_result, text = self.extract_ocr(image, ocr_kwargs)
+
+        # Difines English as default language, if not specified
+        if "language" not in text_analyzer_kwargs:
+            text_analyzer_kwargs["language"] = "en"
+        analyzer_result = self.analyzer_engine.analyze(
+            text=text, **text_analyzer_kwargs
+        )
+        analyzer_result = resolve_conflicts(text, analyzer_result)
+        allow_list = self._check_for_allow_list(text_analyzer_kwargs)
+        bboxes = self.map_results(analyzer_result, ocr_result, text, allow_list)
+
+        return bboxes, text
+
+    def extract_ocr(
+        self, image: object, ocr_kwargs: Optional[dict] = None
+    ) -> Tuple[dict, str]:
+        """Run OCR and return ``(ocr_result, text)`` without any PII analysis.
+
+        Exposed so callers can cache the OCR output and re-map new recognizer
+        results (e.g. a document-wide deny-list pass) onto the same image
+        without paying for OCR again.
+        """
         perform_ocr_kwargs, ocr_threshold = self._parse_ocr_kwargs(ocr_kwargs)
         image, preprocessing_metadata = self.image_preprocessor.preprocess_image(image)
         ocr_result = self.ocr.perform_ocr(image, **perform_ocr_kwargs)
@@ -34,23 +56,21 @@ class CustomImageAnalyzerEngine(ImageAnalyzerEngine):
         if ocr_threshold:
             ocr_result = self.threshold_ocr_result(ocr_result, ocr_threshold)
 
-        # Analyze text
         text = self.ocr.get_text_from_ocr_dict(ocr_result)
+        return ocr_result, text
 
-        # Difines English as default language, if not specified
-        if "language" not in text_analyzer_kwargs:
-            text_analyzer_kwargs["language"] = "en"
-        analyzer_result = self.analyzer_engine.analyze(
-            text=text, **text_analyzer_kwargs
-        )
-        analyzer_result = resolve_conflicts(text, analyzer_result)
-        allow_list = self._check_for_allow_list(text_analyzer_kwargs)
+    def map_results(
+        self,
+        analyzer_result: List,
+        ocr_result: dict,
+        text: str,
+        allow_list: Optional[List[str]] = None,
+    ) -> List[ImageRecognizerResult]:
+        """Map analyzer results to merged image bounding boxes."""
         bboxes = self.map_analyzer_results_to_bounding_boxes(
-            analyzer_result, ocr_result, text, allow_list
+            analyzer_result, ocr_result, text, allow_list or []
         )
-        bboxes = self._merge_entity_bboxes(bboxes)
-
-        return bboxes, text
+        return self._merge_entity_bboxes(bboxes)
     
     def _merge_entity_bboxes(self, bboxes) -> List[ImageRecognizerResult]:
         """Merge bboxes that belong to the same entity span (same start/end/type)."""
