@@ -20,7 +20,7 @@ if __name__ == "__main__":
 
     doc = fitz.open(input_pdf)
     redactor = PDFRedactor(mode="simple")
-    doc, translation_table = redactor.redact(doc)
+    doc, translation_table, _ = redactor.redact(doc)
 
     os.makedirs(os.path.dirname(output_pdf), exist_ok=True)
     doc.save(output_pdf)

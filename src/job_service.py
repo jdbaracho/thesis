@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import functools
+import json
 import logging
 import os
 import traceback
@@ -180,6 +181,88 @@ def delete_all_jobs() -> int:
     return job_repository.delete_all()
 
 
+def _write_llm_reports(
+    source_name: str,
+    failures: List,
+    txt_out: Path,
+    json_out: Path,
+    *,
+    language: str,
+    mode: AnalyzerMode,
+    model_id: Optional[str],
+) -> None:
+    """Write human-readable ``.txt`` and machine-readable ``.json`` LLM reports.
+
+    ``failures`` is the list of :class:`~src.pdf_redactor.LLMFailure` returned
+    by the redactor. The report groups failures by page and notes whether each
+    page failed in the ``text`` layer, an ``image``, or both.
+    """
+    # Group by page -> {"text": bool, "image_xrefs": [...]}
+    pages: Dict[int, Dict[str, object]] = {}
+    for f in failures:
+        bucket = pages.setdefault(f.page, {"text": False, "image_xrefs": []})
+        if f.source == "image":
+            if f.xref is not None:
+                bucket["image_xrefs"].append(f.xref)  # type: ignore[union-attr]
+        else:
+            bucket["text"] = True
+
+    header = (
+        f"LangExtract LLM report \u2014 {source_name}\n"
+        f"mode={mode.value}  model={model_id or '(default)'}  "
+        f"language={language}\n"
+    )
+
+    lines: List[str] = [header]
+    json_pages: List[Dict[str, object]] = []
+    if not failures:
+        lines.append("\nNo LLM failures: every LangExtract call succeeded.\n")
+    else:
+        lines.append(f"\nPages with LLM failures: {len(pages)}\n")
+        for page in sorted(pages):
+            bucket = pages[page]
+            has_text = bool(bucket["text"])
+            xrefs = bucket["image_xrefs"]  # type: ignore[assignment]
+            if has_text and xrefs:
+                label = f"text + image (xref {', '.join(map(str, xrefs))})"
+                sources = ["text", "image"]
+            elif has_text:
+                label = "text"
+                sources = ["text"]
+            else:
+                label = f"image (xref {', '.join(map(str, xrefs))})"
+                sources = ["image"]
+            lines.append(f"  page {page}  \u2014 {label}\n")
+            json_pages.append(
+                {"page": page, "sources": sources, "image_xrefs": list(xrefs)}
+            )
+        lines.append(f"\nTotal failed LLM calls: {len(failures)}\n")
+
+    txt_out.write_text("".join(lines), encoding="utf-8")
+
+    json_payload = {
+        "file": source_name,
+        "mode": mode.value,
+        "model_id": model_id,
+        "language": language,
+        "total_failures": len(failures),
+        "pages": json_pages,
+        "failures": [
+            {
+                "page": f.page,
+                "source": f.source,
+                "xref": f.xref,
+                "error": f.error,
+            }
+            for f in failures
+        ],
+    }
+    json_out.write_text(
+        json.dumps(json_payload, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
 def _redact_one(
     input_path: Path,
     output_dir: Path,
@@ -190,10 +273,11 @@ def _redact_one(
 ) -> List[Path]:
     """Redact a single PDF and return the artefact paths that should be zipped.
 
-    On success returns ``[<stem>_redacted.pdf, <stem>_redacted.xlsx]``. On
-    failure the exception is caught, logged, and reported as a small
-    ``<stem>_error.txt`` file so one bad PDF cannot fail an otherwise valid
-    batch.
+    On success returns ``[<stem>_redacted.pdf, <stem>_redacted.xlsx]`` plus, for
+    non-SIMPLE modes, ``<stem>_llm_report.txt`` and ``<stem>_llm_report.json``
+    describing any LangExtract LLM failures. On failure the exception is caught,
+    logged, and reported as a small ``<stem>_error.txt`` file so one bad PDF
+    cannot fail an otherwise valid batch.
     """
     import fitz  # local import: heavy dep
 
@@ -209,12 +293,27 @@ def _redact_one(
         )
         doc = fitz.open(input_path)
         try:
-            doc, translation_table = redactor.redact(doc)
+            doc, translation_table, llm_failures = redactor.redact(doc)
             doc.save(pdf_out)
         finally:
             doc.close()
         save_translation_table_xlsx(translation_table, str(xlsx_out))
-        return [pdf_out, xlsx_out]
+        artefacts = [pdf_out, xlsx_out]
+        # SIMPLE mode never runs the LLM, so an LLM report would be noise.
+        if mode is not AnalyzerMode.SIMPLE:
+            txt_out = output_dir / f"{stem}_llm_report.txt"
+            json_out = output_dir / f"{stem}_llm_report.json"
+            _write_llm_reports(
+                input_path.name,
+                llm_failures,
+                txt_out,
+                json_out,
+                language=language,
+                mode=mode,
+                model_id=model_id,
+            )
+            artefacts.extend([txt_out, json_out])
+        return artefacts
     except Exception as exc:  # noqa: BLE001 - per-file resilience: one bad PDF must not fail the whole job
         logger.exception("Failed to redact %s", input_path)
         error_path = output_dir / f"{stem}_error.txt"

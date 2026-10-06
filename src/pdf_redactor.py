@@ -16,6 +16,8 @@ import logging
 import os
 import re
 import tempfile
+import threading
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple, TypedDict, Union
 
@@ -37,6 +39,76 @@ from src.presidio_extensions.presidio_utils import resolve_conflicts
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class LLMFailure:
+    """One LangExtract/LLM failure captured during a redaction run.
+
+    ``source`` is ``"text"`` (page text layer) or ``"image"`` (OCR'd image);
+    ``page`` is 1-based; ``xref`` is the PyMuPDF image xref for image failures
+    and ``None`` for text failures.
+    """
+
+    page: int
+    source: str
+    xref: Optional[int]
+    error: str
+
+
+class _LLMFailureSink:
+    """Collects :class:`LLMFailure` records tagged with the current context."""
+
+    def __init__(self) -> None:
+        self.failures: List[LLMFailure] = []
+        self._page: Optional[int] = None
+        self._source: Optional[str] = None
+        self._xref: Optional[int] = None
+
+    def set_context(
+        self, page: int, source: str, xref: Optional[int] = None
+    ) -> None:
+        self._page, self._source, self._xref = page, source, xref
+
+    def record(self, error: str) -> None:
+        self.failures.append(
+            LLMFailure(
+                page=self._page if self._page is not None else -1,
+                source=self._source or "unknown",
+                xref=self._xref,
+                error=error,
+            )
+        )
+
+
+# Per-thread active sink so the shared (cached) recognizer can report failures
+# back to the redaction job currently running on this worker thread.
+_llm_failure_ctx = threading.local()
+
+
+def _current_failure_sink() -> Optional[_LLMFailureSink]:
+    return getattr(_llm_failure_ctx, "sink", None)
+
+
+class _CapturingLangExtractRecognizer(BasicLangExtractRecognizer):
+    """``BasicLangExtractRecognizer`` that records failures instead of raising.
+
+    On any extraction error it logs the failure to the active
+    :class:`_LLMFailureSink` (if one is installed) and returns no results, so a
+    single failed page/image neither aborts the document nor discards the other
+    recognizers' detections.
+    """
+
+    def analyze(self, text, entities=None, nlp_artifacts=None):  # noqa: ANN001
+        try:
+            return super().analyze(text, entities, nlp_artifacts)
+        except Exception as exc:  # noqa: BLE001 - capture LLM failure, keep going
+            sink = _current_failure_sink()
+            if sink is None:
+                raise
+            logger.warning("LangExtract failed: %s", exc)
+            sink.record(str(exc) or exc.__class__.__name__)
+            return []
 
 
 #: Directory holding per-language LangExtract configs.
@@ -232,7 +304,7 @@ def _build_analyzer(
         # default recognizers (it does that whenever registry.recognizers is empty).
         registry = RecognizerRegistry(supported_languages=[language])
         registry.add_recognizer(
-            BasicLangExtractRecognizer(
+            _CapturingLangExtractRecognizer(
                 config_path=_get_config_path_for(language, model_id),
                 supported_language=language,
             )
@@ -252,7 +324,7 @@ def _build_analyzer(
     )
     if mode is AnalyzerMode.HYBRID:
         analyzer.registry.add_recognizer(
-            BasicLangExtractRecognizer(
+            _CapturingLangExtractRecognizer(
                 config_path=_get_config_path_for(language, model_id),
                 supported_language=language,
             )
@@ -372,34 +444,44 @@ class PDFRedactor:
 
     def redact(
         self, doc: fitz.Document
-    ) -> Tuple[fitz.Document, TranslationTable]:
-        """Redact ``doc`` in place and return ``(doc, translation_table)``.
+    ) -> Tuple[fitz.Document, TranslationTable, List[LLMFailure]]:
+        """Redact ``doc`` in place and return ``(doc, translation_table, llm_failures)``.
 
         The translation table maps every detected entity_text to::
 
             {"id": "PERSON-1", "scores": {"PERSON": 0.85, ...}}
+
+        ``llm_failures`` lists every page/image where the LangExtract LLM pass
+        errored (empty when the LLM is disabled or every call succeeded).
         """
         translation_table: TranslationTable = {}
         pending_redactions: List[PendingTextRedaction] = []
         pending_image_redactions: List[PendingImageRedaction] = []
         processed_xrefs: Set[int] = set()
 
-        for page in doc:
-            logger.info("Analyzing page %s/%s", page.number + 1, len(doc))
-            self._analyze_page_text(page, translation_table, pending_redactions)
-            self._analyze_page_images(
-                page,
-                doc,
-                translation_table,
-                pending_image_redactions,
-                processed_xrefs,
-            )
+        sink = _LLMFailureSink()
+        _llm_failure_ctx.sink = sink
+        try:
+            for page in doc:
+                logger.info("Analyzing page %s/%s", page.number + 1, len(doc))
+                self._analyze_page_text(
+                    page, translation_table, pending_redactions
+                )
+                self._analyze_page_images(
+                    page,
+                    doc,
+                    translation_table,
+                    pending_image_redactions,
+                    processed_xrefs,
+                )
+        finally:
+            _llm_failure_ctx.sink = None
 
         self._finalize_translation_table(translation_table)
         self._apply_text_redactions(pending_redactions, translation_table)
         self._draw_image_redactions(pending_image_redactions, translation_table)
 
-        return doc, translation_table
+        return doc, translation_table, sink.failures
 
     # ----------------------------------------------------------------- private
 
@@ -463,6 +545,9 @@ class PDFRedactor:
                 )
                 continue
 
+            sink = _current_failure_sink()
+            if sink is not None:
+                sink.set_context(page.number + 1, "image", xref)
             try:
                 bboxes, text = self.image_analyzer.analyze(
                     pil_image,
@@ -513,6 +598,9 @@ class PDFRedactor:
         if not full_text.strip():
             return
 
+        sink = _current_failure_sink()
+        if sink is not None:
+            sink.set_context(page.number + 1, "text")
         results = self.analyzer.analyze(text=full_text, language=self.language)
         results = resolve_conflicts(full_text, results)
 
